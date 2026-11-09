@@ -219,16 +219,22 @@ interface TrainingDao {
     @Query("SELECT * FROM equipment_profiles WHERE gymId = :gymId ORDER BY createdAt DESC")
     fun observeProfilesByGym(gymId: Long): Flow<List<EquipmentProfile>>
 
-    @Query("SELECT * FROM equipment_profiles WHERE id = :id")
-    suspend fun getProfileById(id: Long): EquipmentProfile?
+    @Query("SELECT * FROM equipment_profiles ORDER BY createdAt DESC")
+    fun observeAllProfiles(): Flow<List<EquipmentProfile>>
 
     @Query("SELECT * FROM equipment_profiles")
     suspend fun getAllProfiles(): List<EquipmentProfile>
+
+    @Query("SELECT * FROM equipment_profiles WHERE id = :id")
+    suspend fun getProfileById(id: Long): EquipmentProfile?
 
     @Insert suspend fun insertProfile(p: EquipmentProfile): Long
     @Update suspend fun updateProfile(p: EquipmentProfile)
     @Query("DELETE FROM equipment_profiles WHERE id = :id")
     suspend fun deleteProfile(id: Long)
+
+    @Query("SELECT * FROM equipment_profile_photos")
+    fun observeAllProfilePhotos(): Flow<List<EquipmentProfilePhoto>>
 
     @Query("SELECT * FROM equipment_profile_photos WHERE profileId = :profileId ORDER BY createdAt ASC")
     fun observePhotosByProfile(profileId: Long): Flow<List<EquipmentProfilePhoto>>
