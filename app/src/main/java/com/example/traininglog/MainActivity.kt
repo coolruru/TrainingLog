@@ -12,7 +12,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -36,7 +35,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -83,13 +86,17 @@ suspend fun saveImageToPrivate(ctx: Context, uri: Uri): String? = withContext(Di
 
 class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
 
-    val sessions = combine(
-        combine(dao.observeSessions(), dao.observeAllExercises(), dao.observeAllSets()) { s, e, st ->
-            Triple(s, e, st)
-        },
-        combine(dao.getAllProfilesFlow(), dao.observeAllProfilePhotos(), dao.observeGyms()) { p, ph, g ->
-            Triple(p, ph, g)
-        }
+    val sessions: StateFlow<List<SessionWithExercises>> = combine(
+        combine(
+            dao.observeSessions(),
+            dao.observeAllExercises(),
+            dao.observeAllSets()
+        ) { s, e, st -> Triple(s, e, st) },
+        combine(
+            dao.observeAllProfiles(),
+            dao.observeAllProfilePhotos(),
+            dao.observeGyms()
+        ) { p, ph, g -> Triple(p, ph, g) }
     ) { (s, e, st), (p, ph, g) ->
         assembleSessions(s, e, st, p, ph, g)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -225,8 +232,6 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         return if (parts.isEmpty()) all else all.filter { it.session.bodyPart in parts }
     }
 
-    // ===== 器械模块 =====
-
     fun addGym(name: String) = viewModelScope.launch {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return@launch
@@ -274,27 +279,12 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         dao.deleteProfilePhoto(photoId)
     }
 
-    fun observeProfilesByGym(gymId: Long): Flow<List<EquipmentProfile>> =
-        dao.observeProfilesByGym(gymId)
-
-    fun observePhotosByProfile(profileId: Long): Flow<List<EquipmentProfilePhoto>> =
-        dao.observePhotosByProfile(profileId)
+    fun observeProfilesByGym(gymId: Long) = dao.observeProfilesByGym(gymId)
+    fun observePhotosByProfile(profileId: Long) = dao.observePhotosByProfile(profileId)
 
     suspend fun getAllProfiles(): List<EquipmentProfile> = dao.getAllProfiles()
     suspend fun getAllProfilePhotos(): List<EquipmentProfilePhoto> = dao.getAllProfilePhotos()
     suspend fun getAllGyms(): List<Gym> = dao.getAllGyms()
-}
-
-@Dao
-interface ExtraDao {
-    @Query("SELECT * FROM equipment_profiles")
-    fun getAllProfilesFlow(): Flow<List<EquipmentProfile>>
-
-    @Query("SELECT * FROM equipment_profile_photos")
-    fun observeAllProfilePhotos(): Flow<List<EquipmentProfilePhoto>>
-
-    @Query("SELECT * FROM gyms ORDER BY createdAt ASC")
-    fun observeGyms(): Flow<List<Gym>>
 }
 
 class TrainingViewModelFactory(private val dao: TrainingDao) : ViewModelProvider.Factory {
@@ -383,8 +373,6 @@ fun displayLoad(weight: Double): String = when {
 
 fun fmtW(w: Double): String = if (w == w.toLong().toDouble()) w.toLong().toString() else w.toString()
 
-// ==================== 记录页 ====================
-
 @Composable
 fun DateField(date: String, onDateChange: (String) -> Unit) {
     val ctx = LocalContext.current
@@ -422,7 +410,6 @@ fun DateField(date: String, onDateChange: (String) -> Unit) {
 
 @Composable
 fun RecordScreen(vm: TrainingViewModel) {
-    val ctx = LocalContext.current
     val currentSession by vm.currentSession.collectAsState()
     val currentPart by vm.currentExercisePart.collectAsState()
     val currentExercises by vm.currentExercises.collectAsState()
@@ -562,14 +549,12 @@ fun RecordScreen(vm: TrainingViewModel) {
             ProfilePickerDialog(
                 vm = vm,
                 exerciseName = exercise,
-                gyms = allGyms,
                 onDismiss = { showProfilePicker = false },
                 onSelect = { linkedProfile = it; showProfilePicker = false }
             )
         }
 
         Text("每组完成情况", style = MaterialTheme.typography.titleSmall)
-        // 每行两列
         val rows = (sets.size + 1) / 2
         repeat(rows) { rowIndex ->
             Row(
@@ -583,9 +568,7 @@ fun RecordScreen(vm: TrainingViewModel) {
                             sets = sets.toMutableList().also { it[i1] = upd }
                         }
                     }
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                } else Spacer(Modifier.weight(1f))
                 val i2 = rowIndex * 2 + 1
                 if (i2 < sets.size) {
                     Box(Modifier.weight(1f)) {
@@ -593,9 +576,7 @@ fun RecordScreen(vm: TrainingViewModel) {
                             sets = sets.toMutableList().also { it[i2] = upd }
                         }
                     }
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                } else Spacer(Modifier.weight(1f))
             }
         }
 
@@ -627,14 +608,10 @@ fun RecordScreen(vm: TrainingViewModel) {
         Text("本次已记录动作", style = MaterialTheme.typography.titleMedium)
         val mainList = currentExercises.filter { !it.exercise.isCoreAddon }
         val coreList = currentExercises.filter { it.exercise.isCoreAddon }
-        mainList.forEach { ex ->
-            ExerciseRow(ex) { vm.removeExercise(ex.exercise.id) }
-        }
+        mainList.forEach { ex -> ExerciseRow(ex) { vm.removeExercise(ex.exercise.id) } }
         if (coreList.isNotEmpty()) {
             Text("训练后核心附加", style = MaterialTheme.typography.titleSmall)
-            coreList.forEach { ex ->
-                ExerciseRow(ex) { vm.removeExercise(ex.exercise.id) }
-            }
+            coreList.forEach { ex -> ExerciseRow(ex) { vm.removeExercise(ex.exercise.id) } }
         }
     }
 }
@@ -703,11 +680,9 @@ fun ExerciseRow(ex: ExerciseWithSets, onDelete: () -> Unit) {
 fun ProfilePickerDialog(
     vm: TrainingViewModel,
     exerciseName: String,
-    gyms: List<Gym>,
     onDismiss: () -> Unit,
     onSelect: (EquipmentProfile) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
     var profiles by remember { mutableStateOf<List<Pair<EquipmentProfile, String>>>(emptyList()) }
     LaunchedEffect(exerciseName) {
         val all = vm.getAllProfiles()
@@ -728,11 +703,11 @@ fun ProfilePickerDialog(
                     items(profiles) { pair ->
                         val (p, g) = pair
                         Card(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            onClick = { onSelect(p) }
+                            onClick = { onSelect(p) },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
                             Column(Modifier.padding(8.dp)) {
-                                Text("${p.equipmentName.ifBlank { p.exerciseName }}", style = MaterialTheme.typography.titleSmall)
+                                Text(p.equipmentName.ifBlank { p.exerciseName }, style = MaterialTheme.typography.titleSmall)
                                 Text("动作：${p.exerciseName}｜健身房：$g", style = MaterialTheme.typography.bodySmall)
                             }
                         }
@@ -744,11 +719,8 @@ fun ProfilePickerDialog(
     )
 }
 
-// ==================== 历史页 ====================
-
 @Composable
 fun HistoryScreen(vm: TrainingViewModel) {
-    val ctx = LocalContext.current
     val list by vm.sessions.collectAsState()
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(list) { s ->
@@ -777,12 +749,9 @@ fun HistoryScreen(vm: TrainingViewModel) {
     }
 }
 
-// ==================== 器械页 ====================
-
 @Composable
 fun EquipmentScreen(vm: TrainingViewModel) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     val gyms by vm.gyms.collectAsState()
     var selectedGymId by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(gyms) {
@@ -791,13 +760,15 @@ fun EquipmentScreen(vm: TrainingViewModel) {
         }
     }
     var profiles by remember { mutableStateOf<List<EquipmentWithPhotos>>(emptyList()) }
-    LaunchedEffect(selectedGymId) {
-        selectedGymId?.let { gid ->
+    LaunchedEffect(selectedGymId, gyms) {
+        val gid = selectedGymId
+        if (gid == null) {
+            profiles = emptyList()
+        } else {
             val ps = vm.getAllProfiles().filter { it.gymId == gid }
             val allPhotos = vm.getAllProfilePhotos()
-            val gymName = gyms.firstOrNull { it.id == gid }?.name ?: ""
             profiles = assembleEquipment(ps, allPhotos, gyms)
-        } ?: run { profiles = emptyList() }
+        }
     }
     var showAddGym by remember { mutableStateOf(false) }
     var newGymName by remember { mutableStateOf("") }
@@ -815,12 +786,7 @@ fun EquipmentScreen(vm: TrainingViewModel) {
                     label = { Text(g.name) }
                 )
             }
-            item {
-                AssistChip(
-                    onClick = { showAddGym = true },
-                    label = { Text("+") }
-                )
-            }
+            item { AssistChip(onClick = { showAddGym = true }, label = { Text("+") }) }
         }
         if (showAddGym) {
             AlertDialog(
@@ -864,8 +830,8 @@ fun EquipmentScreen(vm: TrainingViewModel) {
             ) {
                 items(profiles) { p ->
                     Card(
-                        Modifier.fillMaxWidth(),
-                        onClick = { editing = p.profile }
+                        onClick = { editing = p.profile },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             p.photos.firstOrNull()?.let { ph ->
@@ -877,7 +843,7 @@ fun EquipmentScreen(vm: TrainingViewModel) {
                                 Spacer(Modifier.width(8.dp))
                             }
                             Column(Modifier.weight(1f)) {
-                                Text("${p.profile.equipmentName.ifBlank { p.profile.exerciseName }}",
+                                Text(p.profile.equipmentName.ifBlank { p.profile.exerciseName },
                                     style = MaterialTheme.typography.titleSmall)
                                 Text("动作：${p.profile.exerciseName}｜照片：${p.photos.size}",
                                     style = MaterialTheme.typography.bodySmall)
@@ -890,16 +856,10 @@ fun EquipmentScreen(vm: TrainingViewModel) {
     }
 
     editing?.let { profile ->
-        EquipmentEditScreen(
-            vm = vm,
-            initial = profile,
-            gyms = gyms,
-            onDone = { editing = null }
-        )
+        EquipmentEditScreen(vm = vm, initial = profile, gyms = gyms, onDone = { editing = null })
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EquipmentEditScreen(
     vm: TrainingViewModel,
@@ -909,11 +869,6 @@ fun EquipmentEditScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var profile by remember { mutableStateOf(initial) }
-    var newPhotos by remember { mutableStateOf(listOf<PhotoInput>()) }
-    var existingPhotos by remember { mutableStateOf(listOf<EquipmentProfilePhoto>()) }
-    var removedIds by remember { mutableStateOf(listOf<Long>()) }
-    var pendingCamera by remember { mutableStateOf<File?>(null) }
     var exercise by remember { mutableStateOf(initial.exerciseName) }
     var equipmentName by remember { mutableStateOf(initial.equipmentName) }
     var seat by remember { mutableStateOf(initial.seat) }
@@ -925,11 +880,12 @@ fun EquipmentEditScreen(
     var pulley by remember { mutableStateOf(initial.pulley) }
     var other by remember { mutableStateOf(initial.other) }
     var notes by remember { mutableStateOf(initial.notes) }
+    var existingPhotos by remember { mutableStateOf(listOf<EquipmentProfilePhoto>()) }
+    var newPhotos by remember { mutableStateOf(listOf<PhotoInput>()) }
+    var pendingCamera by remember { mutableStateOf<File?>(null) }
 
     LaunchedEffect(initial.id) {
-        if (initial.id != 0L) {
-            existingPhotos = vm.loadProfilePhotos(initial.id)
-        }
+        if (initial.id != 0L) existingPhotos = vm.loadProfilePhotos(initial.id)
     }
 
     val takePic = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -980,11 +936,7 @@ fun EquipmentEditScreen(
                         AssistChip(onClick = { exercise = e }, label = { Text(e) })
                     }
                 }
-                OutlinedTextField(
-                    value = equipmentName, onValueChange = { equipmentName = it },
-                    label = { Text("器械名称（大剪刀、助力引体机等）") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                OutlinedTextField(equipmentName, { equipmentName = it }, label = { Text("器械名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(seat, { seat = it }, label = { Text("座位") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(backrest, { backrest = it }, label = { Text("靠背") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(grip, { grip = it }, label = { Text("握把") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -1044,13 +996,13 @@ fun EquipmentEditScreen(
             TextButton(onClick = {
                 val gid = selectedGymId ?: return@TextButton
                 if (exercise.isBlank()) return@TextButton
-                val updated = profile.copy(
+                val updated = initial.copy(
                     gymId = gid, exerciseName = exercise, equipmentName = equipmentName,
                     seat = seat, backrest = backrest, grip = grip, weightStack = weightStack,
                     pin = pin, assist = assist, pulley = pulley, other = other, notes = notes
                 )
                 scope.launch {
-                    vm.saveProfile(updated, newPhotos, removedIds)
+                    vm.saveProfile(updated, newPhotos, emptyList())
                     onDone()
                 }
             }) { Text("保存") }
@@ -1067,8 +1019,6 @@ fun EquipmentEditScreen(
         }
     )
 }
-
-// ==================== 导出页 ====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1091,9 +1041,7 @@ fun ExportScreen(vm: TrainingViewModel) {
             BODY_PARTS.forEach { p ->
                 FilterChip(
                     selected = p in selectedParts,
-                    onClick = {
-                        selectedParts = if (p in selectedParts) selectedParts - p else selectedParts + p
-                    },
+                    onClick = { selectedParts = if (p in selectedParts) selectedParts - p else selectedParts + p },
                     label = { Text(p) }
                 )
             }
@@ -1111,8 +1059,7 @@ fun ExportScreen(vm: TrainingViewModel) {
                             sessions,
                             rangeDesc = if (from.isBlank() && to.isBlank()) "全部"
                                 else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
-                            partDesc = if (selectedParts.isEmpty()) "全部"
-                                else selectedParts.joinToString("、")
+                            partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
                         )
                         val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
                         val file = File(dir, "训练记录_${System.currentTimeMillis()}.md")
@@ -1131,8 +1078,6 @@ fun ExportScreen(vm: TrainingViewModel) {
         ) { Text(if (busy) "导出中..." else "导出 Markdown 并分享") }
     }
 }
-
-// ==================== 设置页 ====================
 
 @Composable
 fun SettingsScreen(themeMode: ThemeMode, onThemeModeChange: (ThemeMode) -> Unit) {
