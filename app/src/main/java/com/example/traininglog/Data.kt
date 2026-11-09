@@ -54,7 +54,6 @@ data class SetEntry(
     val failureReps: Int
 )
 
-// 内存中的组装结构，不映射表
 data class ExerciseWithSets(
     val exercise: ExerciseEntry,
     val sets: List<SetEntry>
@@ -76,6 +75,15 @@ interface TrainingDao {
     @Query("SELECT * FROM sets")
     fun observeAllSets(): Flow<List<SetEntry>>
 
+    @Query("SELECT * FROM sessions WHERE date = :date AND bodyPart = :part ORDER BY id ASC LIMIT 1")
+    suspend fun getSessionByDateAndPart(date: String, part: String): Session?
+
+    @Query("SELECT * FROM exercises WHERE sessionId = :sessionId ORDER BY id ASC")
+    suspend fun getExercisesBySession(sessionId: Long): List<ExerciseEntry>
+
+    @Query("SELECT * FROM sets WHERE exerciseId IN (:exerciseIds)")
+    suspend fun getSetsByExerciseIds(exerciseIds: List<Long>): List<SetEntry>
+
     @Query("SELECT * FROM sessions WHERE date >= :from AND date <= :to ORDER BY date ASC")
     suspend fun getBetween(from: String, to: String): List<Session>
 
@@ -91,9 +99,13 @@ interface TrainingDao {
     @Insert suspend fun insertSession(s: Session): Long
     @Insert suspend fun insertExercise(e: ExerciseEntry): Long
     @Insert suspend fun insertSets(sets: List<SetEntry>)
+    @Update suspend fun updateSession(s: Session)
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteSession(id: Long)
+
+    @Query("DELETE FROM exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
 }
 
 @Database(
@@ -116,10 +128,14 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
-fun assemble(list: List<Session>, exercises: List<ExerciseEntry>, sets: List<SetEntry>): List<SessionWithExercises> {
+fun assemble(
+    sessions: List<Session>,
+    exercises: List<ExerciseEntry>,
+    sets: List<SetEntry>
+): List<SessionWithExercises> {
     val exBySession = exercises.groupBy { it.sessionId }
     val setsByExercise = sets.groupBy { it.exerciseId }
-    return list.map { s ->
+    return sessions.map { s ->
         SessionWithExercises(
             s,
             exBySession[s.id].orEmpty().map { ex ->
