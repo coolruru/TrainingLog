@@ -22,7 +22,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -51,29 +53,83 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
     ) { s, e, st -> assemble(s, e, st) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun save(
-        date: String, bodyPart: String, painLoc: String, painScore: Int,
-        sessionNotes: String,
-        exerciseName: String, weight: Double, plannedReps: Int, totalSets: Int,
-        exerciseNotes: String,
-        sets: List<Triple<Boolean, Int, Int>>
+    private val _currentSession = MutableStateFlow<Session?>(null)
+    val currentSession: StateFlow<Session?> = _currentSession
+
+    private val _currentExercises = MutableStateFlow<List<ExerciseWithSets>>(emptyList())
+    val currentExercises: StateFlow<List<ExerciseWithSets>> = _currentExercises
+
+    fun startOrResumeSession(
+        date: String, part: String,
+        painLoc: String, painScore: Int, notes: String
     ) = viewModelScope.launch {
-        val sessionId = dao.insertSession(
-            Session(date = date, bodyPart = bodyPart, painLocation = painLoc,
-                painScore = painScore, notes = sessionNotes)
-        )
-        val exerciseId = dao.insertExercise(
-            ExerciseEntry(sessionId = sessionId, exerciseName = exerciseName,
-                weight = weight, plannedReps = plannedReps, totalSets = totalSets,
-                notes = exerciseNotes)
-        )
-        dao.insertSets(sets.mapIndexed { i, t ->
-            SetEntry(exerciseId = exerciseId, setIndex = i + 1,
-                completed = t.first, actualReps = t.second, failureReps = t.third)
-        })
+        val existing = dao.getSessionByDateAndPart(date, part)
+        if (existing != null) {
+            val updated = existing.copy(painLocation = painLoc, painScore = painScore, notes = notes)
+            dao.updateSession(updated)
+            _currentSession.value = updated
+            loadCurrentExercises(existing.id)
+        } else {
+            val id = dao.insertSession(
+                Session(date = date, bodyPart = part, painLocation = painLoc, painScore = painScore, notes = notes)
+            )
+            _currentSession.value = Session(
+                id = id, date = date, bodyPart = part,
+                painLocation = painLoc, painScore = painScore, notes = notes
+            )
+            _currentExercises.value = emptyList()
+        }
     }
 
-    fun delete(id: Long) = viewModelScope.launch { dao.deleteSession(id) }
+    fun updateCurrentSessionInfo(painLoc: String, painScore: Int, notes: String) = viewModelScope.launch {
+        val s = _currentSession.value ?: return@launch
+        val updated = s.copy(painLocation = painLoc, painScore = painScore, notes = notes)
+        dao.updateSession(updated)
+        _currentSession.value = updated
+    }
+
+    private suspend fun loadCurrentExercises(sessionId: Long) {
+        val exs = dao.getExercisesBySession(sessionId)
+        val sets = if (exs.isEmpty()) emptyList() else dao.getSetsByExerciseIds(exs.map { it.id })
+        _currentExercises.value = exs.map { ex ->
+            ExerciseWithSets(ex, sets.filter { it.exerciseId == ex.id }.sortedBy { it.setIndex })
+        }
+    }
+
+    fun addExerciseToCurrentSession(
+        exerciseName: String, weight: Double, plannedReps: Int, totalSets: Int,
+        exerciseNotes: String, sets: List<Triple<Boolean, Int, Int>>
+    ) = viewModelScope.launch {
+        val session = _currentSession.value ?: return@launch
+        val exerciseId = dao.insertExercise(
+            ExerciseEntry(
+                sessionId = session.id, exerciseName = exerciseName,
+                weight = weight, plannedReps = plannedReps, totalSets = totalSets, notes = exerciseNotes
+            )
+        )
+        dao.insertSets(sets.mapIndexed { i, t ->
+            SetEntry(
+                exerciseId = exerciseId, setIndex = i + 1,
+                completed = t.first, actualReps = t.second, failureReps = t.third
+            )
+        })
+        loadCurrentExercises(session.id)
+    }
+
+    fun removeExercise(exerciseId: Long) = viewModelScope.launch {
+        dao.deleteExercise(exerciseId)
+        _currentSession.value?.let { loadCurrentExercises(it.id) }
+    }
+
+    fun endCurrentSession() {
+        _currentSession.value = null
+        _currentExercises.value = emptyList()
+    }
+
+    fun deleteSession(id: Long) = viewModelScope.launch {
+        dao.deleteSession(id)
+        if (_currentSession.value?.id == id) endCurrentSession()
+    }
 
     suspend fun exportSessions(from: String?, to: String?, parts: List<String>): List<SessionWithExercises> {
         val sessions = if (from != null && to != null) dao.getBetween(from, to) else dao.getAllSessions()
@@ -149,15 +205,19 @@ fun DropdownField(label: String, value: String, options: List<String>, onSelect:
 
 @Composable
 fun RecordScreen(vm: TrainingViewModel) {
+    val currentSession by vm.currentSession.collectAsState()
+    val currentExercises by vm.currentExercises.collectAsState()
+
     var date by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
     var bodyPart by remember { mutableStateOf("胸") }
+    var painLoc by remember { mutableStateOf("无") }
+    var painScore by remember { mutableStateOf(0f) }
+    var sessionNotes by remember { mutableStateOf("") }
+
     var exercise by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
     var plannedReps by remember { mutableStateOf("8") }
     var totalSets by remember { mutableStateOf("5") }
-    var painLoc by remember { mutableStateOf("无") }
-    var painScore by remember { mutableStateOf(0f) }
-    var sessionNotes by remember { mutableStateOf("") }
     var exerciseNotes by remember { mutableStateOf("") }
     var sets by remember { mutableStateOf(listOf<SetInput>()) }
 
@@ -171,10 +231,50 @@ fun RecordScreen(vm: TrainingViewModel) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Text("训练信息", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(date, { date = it }, label = { Text("日期 yyyy-MM-dd") }, modifier = Modifier.fillMaxWidth())
 
-        DropdownField("训练部位", bodyPart, BODY_PARTS) { bodyPart = it; exercise = "" }
+        DropdownField("训练部位", bodyPart, BODY_PARTS) {
+            bodyPart = it
+            exercise = ""
+            if (currentSession != null && currentSession?.bodyPart != it) {
+                vm.endCurrentSession()
+            }
+        }
 
+        DropdownField("疼痛部位", painLoc, PAIN_LOCATIONS) { painLoc = it }
+        Text("疼痛指数：${painScore.toInt()} / 10")
+        Slider(value = painScore, onValueChange = { painScore = it }, valueRange = 0f..10f, steps = 9)
+        OutlinedTextField(sessionNotes, { sessionNotes = it }, label = { Text("训练备注") }, modifier = Modifier.fillMaxWidth())
+
+        if (currentSession == null) {
+            Button(
+                onClick = {
+                    vm.startOrResumeSession(date, bodyPart, painLoc, painScore.toInt(), sessionNotes)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("开始 / 继续本次训练") }
+            Text("提示：同一天同部位会合并到同一次训练，继续添加动作即可。", style = MaterialTheme.typography.bodySmall)
+            return@Column
+        }
+
+        val s = currentSession!!
+        Card {
+            Column(Modifier.padding(10.dp)) {
+                Text("当前训练：${s.date}｜${s.bodyPart}", style = MaterialTheme.typography.titleMedium)
+                Text("已记录 ${currentExercises.size} 个动作", style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        vm.updateCurrentSessionInfo(painLoc, painScore.toInt(), sessionNotes)
+                    }) { Text("更新疼痛/备注") }
+                    OutlinedButton(onClick = { vm.endCurrentSession() }) { Text("结束本次训练") }
+                }
+            }
+        }
+
+        HorizontalDivider()
+
+        Text("添加动作", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             exercise, { exercise = it },
             label = { Text("动作（可选可填）") },
@@ -203,44 +303,38 @@ fun RecordScreen(vm: TrainingViewModel) {
                 modifier = Modifier.weight(1f))
         }
 
-        DropdownField("疼痛部位", painLoc, PAIN_LOCATIONS) { painLoc = it }
-
-        Text("疼痛指数：${painScore.toInt()} / 10")
-        Slider(value = painScore, onValueChange = { painScore = it }, valueRange = 0f..10f, steps = 9)
-
-        OutlinedTextField(sessionNotes, { sessionNotes = it }, label = { Text("训练备注") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(exerciseNotes, { exerciseNotes = it }, label = { Text("动作备注") }, modifier = Modifier.fillMaxWidth())
 
-        Text("每组完成情况", style = MaterialTheme.typography.titleMedium)
-        sets.forEachIndexed { i, s ->
+        Text("每组完成情况", style = MaterialTheme.typography.titleSmall)
+        sets.forEachIndexed { i, st ->
             Card {
                 Column(Modifier.padding(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = s.completed, onCheckedChange = {
+                        Checkbox(checked = st.completed, onCheckedChange = {
                             sets = sets.toMutableList().also { l ->
-                                l[i] = s.copy(completed = it, failure = if (it) 0 else s.failure)
+                                l[i] = st.copy(completed = it, failure = if (it) 0 else st.failure)
                             }
                         })
-                        Text("第${s.index}组 完成")
+                        Text("第${st.index}组 完成")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
-                            s.actual.toString(),
+                            st.actual.toString(),
                             { v ->
                                 sets = sets.toMutableList().also { l ->
-                                    l[i] = s.copy(actual = v.toIntOrNull() ?: 0)
+                                    l[i] = st.copy(actual = v.toIntOrNull() ?: 0)
                                 }
                             },
                             label = { Text("实际次数") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f)
                         )
-                        if (!s.completed) {
+                        if (!st.completed) {
                             OutlinedTextField(
-                                s.failure.toString(),
+                                st.failure.toString(),
                                 { v ->
                                     sets = sets.toMutableList().also { l ->
-                                        l[i] = s.copy(failure = v.toIntOrNull() ?: 0)
+                                        l[i] = st.copy(failure = v.toIntOrNull() ?: 0)
                                     }
                                 },
                                 label = { Text("力竭次数") },
@@ -256,19 +350,36 @@ fun RecordScreen(vm: TrainingViewModel) {
         Button(
             onClick = {
                 if (exercise.isBlank()) return@Button
-                vm.save(
-                    date = date, bodyPart = bodyPart, painLoc = painLoc,
-                    painScore = painScore.toInt(), sessionNotes = sessionNotes,
-                    exerciseName = exercise, weight = weight.toDoubleOrNull() ?: 0.0,
+                vm.addExerciseToCurrentSession(
+                    exerciseName = exercise,
+                    weight = weight.toDoubleOrNull() ?: 0.0,
                     plannedReps = plannedReps.toIntOrNull() ?: 0,
                     totalSets = totalSets.toIntOrNull() ?: sets.size,
                     exerciseNotes = exerciseNotes,
                     sets = sets.map { Triple(it.completed, it.actual, it.failure) }
                 )
+                exercise = ""
                 exerciseNotes = ""
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("保存记录") }
+        ) { Text("添加到本次训练") }
+
+        HorizontalDivider()
+
+        Text("本次已记录动作", style = MaterialTheme.typography.titleMedium)
+        if (currentExercises.isEmpty()) {
+            Text("还没有动作，添加后会显示在这里。", style = MaterialTheme.typography.bodySmall)
+        } else {
+            currentExercises.forEach { ex ->
+                Card {
+                    Column(Modifier.padding(10.dp)) {
+                        val done = ex.sets.count { it.completed }
+                        Text("${ex.exercise.exerciseName}  ${ex.exercise.weight}kg×${ex.exercise.plannedReps}×${ex.exercise.totalSets}  完成$done/${ex.exercise.totalSets}")
+                        TextButton(onClick = { vm.removeExercise(ex.exercise.id) }) { Text("删除这个动作") }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -287,7 +398,7 @@ fun HistoryScreen(vm: TrainingViewModel) {
                         val done = ex.sets.count { it.completed }
                         Text("· ${ex.exercise.exerciseName} ${ex.exercise.weight}kg×${ex.exercise.plannedReps}×${ex.exercise.totalSets} 完成$done/${ex.exercise.totalSets}")
                     }
-                    TextButton(onClick = { vm.delete(s.session.id) }) { Text("删除") }
+                    TextButton(onClick = { vm.deleteSession(s.session.id) }) { Text("删除本次训练") }
                 }
             }
         }
