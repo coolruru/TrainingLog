@@ -44,6 +44,11 @@ object MarkdownExporter {
                 sb.appendLine("- 完成：$done/${ex.exercise.totalSets} 组")
                 if (ex.exercise.notes.isNotBlank())
                     sb.appendLine("- 备注：${ex.exercise.notes}")
+                if (ex.photos.isNotEmpty()) {
+                    val tagCount = ex.photos.groupingBy { it.tag }.eachCount()
+                        .entries.joinToString("、") { "${it.key}${it.value}张" }
+                    sb.appendLine("- 器械照片：${ex.photos.size} 张（$tagCount）")
+                }
                 sb.appendLine("- 组明细：")
                 ex.sets.sortedBy { it.setIndex }.forEach { set ->
                     val mark = if (set.completed) "✓完成" else "✗未完成"
