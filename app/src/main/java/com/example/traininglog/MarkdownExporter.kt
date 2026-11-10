@@ -7,15 +7,6 @@ object MarkdownExporter {
         return if (ex.exercise.weight < 0) "助力$base" else base
     }
 
-    fun loadDisplay(weight: Double): String = when {
-        weight < 0 -> "助力${fmt(-weight)}kg"
-        weight == 0.0 -> "自重"
-        else -> "${fmt(weight)}kg"
-    }
-
-    private fun fmt(w: Double): String =
-        if (w == w.toLong().toDouble()) w.toLong().toString() else w.toString()
-
     fun build(
         sessions: List<SessionWithExercises>,
         rangeDesc: String,
@@ -40,15 +31,23 @@ object MarkdownExporter {
             sb.appendLine("## $date｜$part")
             sb.appendLine()
 
+            val goal = list.mapNotNull { it.session.goal.ifBlank { null } }.distinct().firstOrNull()
+            if (!goal.isNullOrBlank()) sb.appendLine("> 目标：$goal")
             val sessionNotes = list.mapNotNull { it.session.notes.ifBlank { null } }.distinct()
-            val pains = list.map { it.session.painScore to it.session.painLocation }
-                .filter { it.first > 0 }
-                .distinct()
             if (sessionNotes.isNotEmpty())
                 sb.appendLine("> 训练备注：${sessionNotes.joinToString("；")}")
-            if (pains.isNotEmpty())
-                sb.appendLine("> 疼痛：${pains.joinToString("；") { "${it.second} ${it.first}/10" }}")
-            if (sessionNotes.isNotEmpty() || pains.isNotEmpty()) sb.appendLine()
+
+            val totalDuration = list.sumOf { it.session.durationSeconds }
+            if (totalDuration > 0) sb.appendLine("> 总时长：${formatDuration(totalDuration)}")
+
+            val pains = list.flatMap { it.painRecords }
+            if (pains.isNotEmpty()) {
+                sb.appendLine("> 疼痛记录：")
+                pains.forEach { p ->
+                    sb.appendLine("> - ${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}")
+                }
+            }
+            sb.appendLine()
 
             val all = list.flatMap { it.exercises }
             val main = all.filter { !it.exercise.isCoreAddon }
@@ -67,7 +66,8 @@ object MarkdownExporter {
 
     private fun render(sb: StringBuilder, ex: ExerciseWithSets, level: String) {
         sb.appendLine("$level ${displayExerciseName(ex)}")
-        sb.appendLine("- 重量：${loadDisplay(ex.exercise.weight)} × ${ex.exercise.plannedReps}次 × ${ex.exercise.totalSets}组")
+        sb.appendLine("- 重量：${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps}次 × ${ex.exercise.totalSets}组")
+        if (ex.exercise.restSeconds > 0) sb.appendLine("- 组间休息：${ex.exercise.restSeconds}s")
         val done = ex.sets.count { it.completed }
         sb.appendLine("- 完成：$done/${ex.exercise.totalSets} 组")
         if (ex.exercise.notes.isNotBlank())
@@ -85,13 +85,13 @@ object MarkdownExporter {
             }
             val str = if (settings.isEmpty()) "" else "｜${settings.joinToString("、")}"
             sb.appendLine("- 器械：${p.equipmentName.ifBlank { p.exerciseName }}（${ex.gymName}）$str")
-            if (ex.equipmentPhoto != null) sb.appendLine("- 器械照片：有")
         }
         sb.appendLine("- 组明细：")
         ex.sets.sortedBy { it.setIndex }.forEach { set ->
             val mark = if (set.completed) "✓完成" else "✗未完成"
             val extra = if (!set.completed) "，力竭${set.failureReps}次" else ""
-            sb.appendLine("  - 第${set.setIndex}组：$mark，实际${set.actualReps}次$extra")
+            val dur = if (set.durationSeconds > 0) "，用时${set.durationSeconds}s" else ""
+            sb.appendLine("  - 第${set.setIndex}组：$mark，实际${set.actualReps}次$extra$dur")
         }
         sb.appendLine()
     }
