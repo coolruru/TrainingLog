@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -29,21 +30,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
-import androidx.compose.foundation.horizontalScroll
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) { delay(100); now = System.currentTimeMillis() }
-    }
+    LaunchedEffect(Unit) { while (true) { delay(100); now = System.currentTimeMillis() } }
 
     var showPainDialog by remember { mutableStateOf(false) }
-    var pendingFail by remember { mutableStateOf<Pair<Int, Int>?>(null) } // exIdx, setIdx
+    var pendingFail by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var showAddExercise by remember { mutableStateOf(false) }
 
     val totalElapsed = ((now - active.startMs) / 1000).toInt()
+    val restingAfter = findRestingAfter(active)
 
     Scaffold(
         topBar = {
@@ -76,11 +75,12 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
                     }
                 }
             }
-
             itemsIndexed(active.exercises) { exIdx, ex ->
-                ExerciseRow(active = active, exIdx = exIdx, ex = ex, now = now,
-                    onClickBlock = { setIdx -> vm.clickBlock(exIdx, setIdx) },
-                    onLongPressBlock = { setIdx -> pendingFail = exIdx to setIdx },
+                ExerciseRow(
+                    exIdx = exIdx, ex = ex, now = now,
+                    cupAfterBlock = restingAfter?.takeIf { it.exIdx == exIdx }?.blockIdx,
+                    onClickBlock = { i -> vm.clickBlock(exIdx, i) },
+                    onLongPressBlock = { i -> pendingFail = exIdx to i },
                     onSkip = { vm.skipExercise(exIdx) }
                 )
                 Spacer(Modifier.height(4.dp))
@@ -90,46 +90,59 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     }
 
     if (showPainDialog) {
-        PainDialog(
-            onDismiss = { showPainDialog = false },
-            onConfirm = { loc, score, note ->
-                vm.addPainRecord(loc, score, note)
-                showPainDialog = false
-            }
-        )
+        PainDialog(onDismiss = { showPainDialog = false }, onConfirm = { loc, sc, n ->
+            vm.addPainRecord(loc, sc, n); showPainDialog = false
+        })
     }
-
     if (pendingFail != null) {
         val (exIdx, setIdx) = pendingFail!!
-        val ex = active.exercises[exIdx]
-        FailBlockDialog(
-            plannedReps = ex.plannedReps,
+        FailBlockDialog(plannedReps = active.exercises[exIdx].plannedReps,
             onDismiss = { pendingFail = null },
-            onConfirm = { actual, failure ->
-                vm.markBlockFailed(exIdx, setIdx, actual, failure)
-                pendingFail = null
-            }
-        )
+            onConfirm = { a, f -> vm.markBlockFailed(exIdx, setIdx, a, f); pendingFail = null })
     }
-
     if (showAddExercise) {
-        AddExerciseDialog(
-            bodyPart = active.bodyPart,
-            onDismiss = { showAddExercise = false },
-            onConfirm = { ep ->
-                vm.addExerciseDuringWorkout(ep)
-                showAddExercise = false
-            }
-        )
+        AddExerciseDialog(bodyPart = active.bodyPart, onDismiss = { showAddExercise = false },
+            onConfirm = { ep -> vm.addExerciseDuringWorkout(ep); showAddExercise = false })
     }
+}
+
+private data class RestingInfo(val exIdx: Int, val blockIdx: Int)
+
+private fun findRestingAfter(active: ActiveWorkout): RestingInfo? {
+    // 全局第一个 IDLE 方块
+    var firstIdle: Pair<Int, Int>? = null
+    outer@ for (exIdx in active.exercises.indices) {
+        val ex = active.exercises[exIdx]
+        if (ex.skipped) continue
+        for (setIdx in ex.blocks.indices) {
+            if (ex.blocks[setIdx].status == BlockStatus.IDLE) {
+                firstIdle = exIdx to setIdx; break@outer
+            }
+        }
+    }
+    val idle = firstIdle ?: return null
+    // 找它前一个 DONE/FAILED
+    var last: RestingInfo? = null
+    outer@ for (exIdx in active.exercises.indices) {
+        val ex = active.exercises[exIdx]
+        if (ex.skipped) continue
+        for (setIdx in ex.blocks.indices) {
+            if (exIdx == idle.first && setIdx == idle.second) break@outer
+            val b = ex.blocks[setIdx]
+            if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) {
+                last = RestingInfo(exIdx, setIdx)
+            }
+        }
+    }
+    return last
 }
 
 @Composable
 private fun ExerciseRow(
-    active: ActiveWorkout,
     exIdx: Int,
     ex: ActiveExercise,
     now: Long,
+    cupAfterBlock: Int?,
     onClickBlock: (Int) -> Unit,
     onLongPressBlock: (Int) -> Unit,
     onSkip: () -> Unit
@@ -148,31 +161,23 @@ private fun ExerciseRow(
                 }
             }
             if (ex.notes.isNotBlank()) Text("备注：${ex.notes}", style = MaterialTheme.typography.bodySmall)
-
             if (!ex.skipped) {
-                // 方块 + 杯子
-                val completedIdx = ex.blocks.indexOfLast { it.status == BlockStatus.DONE || it.status == BlockStatus.FAILED }
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     ex.blocks.forEachIndexed { i, b ->
                         BlockView(
-                            block = b,
-                            now = now,
-                            onClick = { onClickBlock(i) },
-                            onLongPress = { onLongPressBlock(i) }
+                            block = b, now = now,
+                            onClick = { onClickBlock(i) }, onLongPress = { onLongPressBlock(i) }
                         )
-                        // 每两个方块之间（含最后一个方块之后、下一动作开始前）显示杯子
-                        val showCup = completedIdx == i
-                        if (showCup) {
-                            val completedBlock = ex.blocks[i]
-                            val restElapsed = now - completedBlock.endMs
+                        if (cupAfterBlock == i) {
+                            val restElapsed = now - b.endMs
                             val restMs = ex.restSeconds * 1000L
                             val progress = if (restMs > 0) (1f - restElapsed.toFloat() / restMs).coerceIn(0f, 1f) else 1f
                             val shaking = restMs > 0 && restElapsed >= restMs
-                            WaterCup(progress = progress, shaking = shaking)
-                        } else {
+                            WaterCup(progress = progress, shaking = shaking, restElapsedSec = (restElapsed / 1000).toInt())
+                        } else if (i < ex.blocks.size - 1) {
                             Spacer(Modifier.width(6.dp))
                         }
                     }
@@ -196,43 +201,41 @@ private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLong
     }
     val label = when (block.status) {
         BlockStatus.IDLE -> "${block.setIndex}"
-        BlockStatus.RUNNING -> {
-            val elapsed = ((now - block.startMs) / 1000).toInt()
-            "$elapsed s"
-        }
+        BlockStatus.RUNNING -> "${((now - block.startMs) / 1000).toInt()}s"
         BlockStatus.DONE -> {
             val d = if (block.endMs > block.startMs) ((block.endMs - block.startMs) / 1000).toInt() else 0
-            "${block.setIndex} · ${d}s"
+            "${block.setIndex}·${d}s"
         }
         BlockStatus.FAILED -> "未完成"
     }
-    Box(
-        Modifier
-            .size(width = 64.dp, height = 52.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bg)
-            .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
-            .pointerInput(block) {
-                detectTapGestures(
-                    onTap = { onClick() },
-                    onLongPress = { onLongPress() }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, color = textColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    val restLabel = if ((block.status == BlockStatus.DONE || block.status == BlockStatus.FAILED) && block.restTakenMs > 0)
+        "休${block.restTakenMs / 1000}s" else ""
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(width = 66.dp, height = 52.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(bg)
+                .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
+                .pointerInput(block) {
+                    detectTapGestures(onTap = { onClick() }, onLongPress = { onLongPress() })
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(label, color = textColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (restLabel.isNotEmpty()) {
+            Text(restLabel, style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
 @Composable
-private fun WaterCup(progress: Float, shaking: Boolean) {
+private fun WaterCup(progress: Float, shaking: Boolean, restElapsedSec: Int) {
     val infinite = rememberInfiniteTransition()
     val dx by infinite.animateFloat(
         initialValue = -3f, targetValue = 3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(120, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        )
+        animationSpec = infiniteRepeatable(tween(120, easing = LinearEasing), RepeatMode.Reverse)
     )
     val modifier = if (shaking) Modifier.offset(x = dx.dp) else Modifier
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
@@ -245,14 +248,10 @@ private fun WaterCup(progress: Float, shaking: Boolean) {
             contentAlignment = Alignment.BottomCenter
         ) {
             Box(
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(progress)
-                    .background(Color(0xFF4FC3F7))
+                Modifier.fillMaxWidth().fillMaxHeight(progress).background(Color(0xFF4FC3F7))
             )
         }
-        Text(if (shaking) "休息完" else "${(progress * 100).roundToInt()}%",
-            style = MaterialTheme.typography.labelSmall)
+        Text(if (shaking) "休息完" else "${restElapsedSec}s", style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -274,7 +273,7 @@ private fun PainDialog(onDismiss: () -> Unit, onConfirm: (String, Int, String) -
                 }
                 Text("指数：${score.toInt()} / 10")
                 Slider(value = score, onValueChange = { score = it }, valueRange = 0f..10f, steps = 9)
-                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注（可选）") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = { TextButton(onClick = { onConfirm(location, score.toInt(), note) }) { Text("记录") } },
@@ -292,16 +291,12 @@ private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = actual, onValueChange = { actual = it },
-                    label = { Text("实际完成次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    label = { Text("实际完成次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 OutlinedTextField(value = failure, onValueChange = { failure = it },
-                    label = { Text("其中力竭次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    label = { Text("其中力竭次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
         },
-        confirmButton = { TextButton(onClick = {
-            onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0)
-        }) { Text("确认") } },
+        confirmButton = { TextButton(onClick = { onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0) }) { Text("确认") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
@@ -322,9 +317,7 @@ private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm
             Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("动作") }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    library.forEach { n ->
-                        AssistChip(onClick = { name = n }, label = { Text(n) })
-                    }
+                    library.forEach { n -> AssistChip(onClick = { name = n }, label = { Text(n) }) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     OutlinedTextField(value = weight, onValueChange = { weight = it }, label = { Text("重量") }, modifier = Modifier.weight(1f))
@@ -336,16 +329,8 @@ private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm
             }
         },
         confirmButton = { TextButton(onClick = {
-            if (name.isNotBlank()) {
-                onConfirm(ExercisePlan(
-                    exerciseName = name,
-                    weight = weight.toDoubleOrNull() ?: 0.0,
-                    plannedReps = reps.toIntOrNull() ?: 8,
-                    totalSets = sets.toIntOrNull() ?: 5,
-                    restSeconds = rest.toIntOrNull() ?: 90,
-                    notes = note
-                ))
-            }
+            if (name.isNotBlank()) onConfirm(ExercisePlan(name, weight.toDoubleOrNull() ?: 0.0,
+                reps.toIntOrNull() ?: 8, sets.toIntOrNull() ?: 5, rest.toIntOrNull() ?: 90, note))
         }) { Text("添加") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
