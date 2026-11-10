@@ -1,67 +1,347 @@
 package com.example.traininglog
 
 import android.content.Intent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Calendar
+import java.util.Locale
 
 @Composable
 fun HistoryScreen(vm: TrainingViewModel) {
-    val list by vm.sessions.collectAsState()
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(list) { s ->
-            Card {
-                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${s.session.date}｜${s.session.bodyPart}", style = MaterialTheme.typography.titleMedium)
-                        if (s.session.goal.isNotBlank()) {
-                            Spacer(Modifier.width(6.dp))
-                            Text("· ${s.session.goal}", style = MaterialTheme.typography.bodySmall)
+    val allSessions by vm.sessions.collectAsState()
+    var viewMode by remember { mutableStateOf(0) } // 0=日历,1=列表
+    var exportOpen by remember { mutableStateOf(false) }
+    var detail by remember { mutableStateOf<SessionWithExercises?>(null) }
+
+    if (detail != null) {
+        SessionDetailScreen(detail!!, onBack = { detail = null })
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = viewMode) {
+            Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
+            Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
+        }
+        if (viewMode == 0) CalendarView(allSessions, onPickSession = { detail = it })
+        else ListView(allSessions, onPickSession = { detail = it })
+    }
+    if (exportOpen) ExportDialog(vm) { exportOpen = false }
+}
+
+// ===================== 日历视图 =====================
+
+@Composable
+private fun CalendarView(all: List<SessionWithExercises>, onPickSession: (SessionWithExercises) -> Unit) {
+    val today = remember { Calendar.getInstance() }
+    var year by remember { mutableStateOf(today.get(Calendar.YEAR)) }
+    var month by remember { mutableStateOf(today.get(Calendar.MONTH) + 1) }
+    var level by remember { mutableStateOf(0) } // 0=月,1=年,2=年份
+    var decadeStart by remember { mutableStateOf(year - 4) }
+    var selectedDay by remember { mutableStateOf<Int?>(if (year == today.get(Calendar.YEAR) && month == today.get(Calendar.MONTH) + 1) today.get(Calendar.DAY_OF_MONTH) else null) }
+
+    // 按月训练次数
+    val monthCountMap = remember(all) {
+        all.groupBy {
+            val p = it.session.date.split("-"); (p[0].toIntOrNull() ?: 0) to (p[1].toIntOrNull() ?: 0)
+        }.mapValues { (_, list) -> list.map { it.session.date }.distinct().size }
+    }
+    val yearCountMap = remember(all) {
+        all.groupBy { it.session.date.split("-").getOrNull(0)?.toIntOrNull() ?: 0 }
+            .mapValues { (_, list) -> list.map { it.session.date }.distinct().size }
+    }
+    val dayPartsMap = remember(all, year, month) {
+        all.filter {
+            val p = it.session.date.split("-")
+            p.getOrNull(0)?.toIntOrNull() == year && p.getOrNull(1)?.toIntOrNull() == month
+        }.groupBy { it.session.date.split("-").getOrNull(2)?.toIntOrNull() ?: 0 }
+    }
+
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Box(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    when (level) {
+                        0 -> { month--; if (month < 1) { month = 12; year-- }; selectedDay = null }
+                        1 -> year--
+                        2 -> decadeStart -= 9
+                    }
+                }) { Text("‹") }
+                Text(
+                    when (level) {
+                        0 -> "${year}年${month}月"
+                        1 -> "${year}年"
+                        else -> ""
+                    },
+                    modifier = Modifier.clickable {
+                        when (level) {
+                            0 -> { level = 1 }
+                            1 -> { decadeStart = year - 4; level = 2 }
                         }
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
+                TextButton(onClick = {
+                    when (level) {
+                        0 -> { month++; if (month > 12) { month = 1; year++ }; selectedDay = null }
+                        1 -> year++
+                        2 -> decadeStart += 9
                     }
-                    if (s.session.durationSeconds > 0) {
-                        Text("时长：${formatDuration(s.session.durationSeconds)}", style = MaterialTheme.typography.bodySmall)
+                }) { Text("›") }
+            }
+        }
+
+        when (level) {
+            0 -> MonthGrid(year, month, dayPartsMap, selectedDay) { selectedDay = it }
+            1 -> YearGrid(year, monthCountMap) { m -> month = m; selectedDay = null; level = 0 }
+            else -> DecadeGrid(decadeStart, yearCountMap) { y -> year = y; level = 1 }
+        }
+
+        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            TextButton(
+                onClick = {
+                    year = today.get(Calendar.YEAR)
+                    month = today.get(Calendar.MONTH) + 1
+                    selectedDay = today.get(Calendar.DAY_OF_MONTH)
+                    level = 0
+                },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) { Text("今") }
+        }
+
+        if (level == 0 && selectedDay != null) {
+            val list = dayPartsMap[selectedDay].orEmpty()
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            if (list.isEmpty()) {
+                Text("${month}月${selectedDay}日 · 休", style = MaterialTheme.typography.bodySmall)
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                    items(list) { s ->
+                        SessionSummaryRow(s) { onPickSession(s) }
                     }
-                    if (s.session.notes.isNotBlank()) {
-                        Text("备注：${s.session.notes}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    s.painRecords.forEach { p ->
-                        Text("疼痛：${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}",
-                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                    s.exercises.forEach { ex ->
-                        val name = if (ex.exercise.weight < 0) "助力${ex.exercise.exerciseName}" else ex.exercise.exerciseName
-                        val done = ex.sets.count { it.completed }
-                        val totalSec = ex.sets.sumOf { it.durationSeconds }
-                        Text(
-                            "· $name ${displayLoad(ex.exercise.weight)}×${ex.exercise.plannedReps}×${ex.exercise.totalSets} 完成$done/${ex.exercise.totalSets}" +
-                                (if (totalSec > 0) " 用时${totalSec}s" else "") +
-                                (if (ex.exercise.isCoreAddon) " [核心]" else "")
-                        )
-                        ex.equipmentProfile?.let { p ->
-                            Text("  器械：${p.equipmentName.ifBlank { p.exerciseName }}（${ex.gymName}）",
-                                style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    TextButton(onClick = { vm.deleteSession(s.session.id) }) { Text("删除本次训练") }
                 }
             }
         }
     }
 }
 
+@Composable
+private fun MonthGrid(
+    year: Int, month: Int,
+    dayPartsMap: Map<Int, List<SessionWithExercises>>,
+    selectedDay: Int?,
+    onPickDay: (Int) -> Unit
+) {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.YEAR, year)
+        set(Calendar.MONTH, month - 1)
+        set(Calendar.DAY_OF_MONTH, 1)
+    }
+    val firstDow = cal.get(Calendar.DAY_OF_WEEK) // Sunday=1
+    val offset = (firstDow + 5) % 7 // Monday-start
+    val days = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val weekNames = listOf("一", "二", "三", "四", "五", "六", "日")
+
+    Column {
+        Row(Modifier.fillMaxWidth()) {
+            weekNames.forEach { w ->
+                Text(w, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        val total = offset + days
+        val rows = (total + 6) / 7
+        for (r in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (c in 0..6) {
+                    val idx = r * 7 + c
+                    val dayNum = idx - offset + 1
+                    if (dayNum in 1..days) {
+                        val isTraining = (dayPartsMap[dayNum]?.isNotEmpty() == true)
+                        val isSelected = selectedDay == dayNum
+                        val bg = when {
+                            isSelected -> MaterialTheme.colorScheme.primary
+                            isTraining -> Color(0xFFFFB74D)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                        val textColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                        Box(
+                            Modifier.weight(1f).aspectRatio(1f).padding(3.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(bg)
+                                .clickable { onPickDay(dayNum) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("$dayNum", color = textColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                if (!isTraining) Text("休", color = textColor, fontSize = 9.sp)
+                            }
+                        }
+                    } else {
+                        Spacer(Modifier.weight(1f).aspectRatio(1f).padding(3.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun YearGrid(year: Int, monthCountMap: Map<Pair<Int, Int>, Int>, onPickMonth: (Int) -> Unit) {
+    val months = (1..12).toList()
+    LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(months) { m ->
+            val count = monthCountMap[year to m] ?: 0
+            val bg = orangeByCount(count)
+            Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).background(bg)
+                .clickable { onPickMonth(m) }, contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${m}月", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    if (count > 0) Text("${count}次", fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DecadeGrid(decadeStart: Int, yearCountMap: Map<Int, Int>, onPickYear: (Int) -> Unit) {
+    val years = (decadeStart..(decadeStart + 8)).toList()
+    LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(years) { y ->
+            val count = yearCountMap[y] ?: 0
+            val bg = orangeByCount(count)
+            Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).background(bg)
+                .clickable { onPickYear(y) }, contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("$y", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    if (count > 0) Text("${count}次", fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+private fun orangeByCount(count: Int): Color = when {
+    count == 0 -> Color(0xFFEEEEEE)
+    count <= 5 -> Color(0xFFFFE0B2)
+    count <= 10 -> Color(0xFFFFB74D)
+    count <= 15 -> Color(0xFFFB8C00)
+    else -> Color(0xFFE65100)
+}
+
+@Composable
+private fun SessionSummaryRow(s: SessionWithExercises, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(s.session.bodyPart, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(48.dp))
+            Text(s.session.goal.ifBlank { "—" }, modifier = Modifier.width(56.dp))
+            Text("${s.exercises.size}动作", modifier = Modifier.width(64.dp))
+            Text(if (s.session.durationSeconds > 0) formatDuration(s.session.durationSeconds) else "—")
+        }
+    }
+}
+
+// ===================== 列表视图 =====================
+
+@Composable
+private fun ListView(all: List<SessionWithExercises>, onPickSession: (SessionWithExercises) -> Unit) {
+    val sorted = remember(all) { all.sortedWith(compareByDescending<SessionWithExercises> { it.session.date }.thenByDescending { it.session.createdAt }) }
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(sorted) { s ->
+            Card(onClick = { onPickSession(s) }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(s.session.date, style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.width(8.dp))
+                        Text("${s.session.bodyPart}｜${s.session.goal.ifBlank { "—" }}｜${s.exercises.size}动作｜${if (s.session.durationSeconds > 0) formatDuration(s.session.durationSeconds) else "—"}",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ===================== 详情页 =====================
+
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionDetailScreen(s: SessionWithExercises, onBack: () -> Unit) {
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("${s.session.date}｜${s.session.bodyPart}") },
+            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } })
+    }) { p ->
+        LazyColumn(Modifier.padding(p).fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Card {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("目标：${s.session.goal.ifBlank { "—" }}", style = MaterialTheme.typography.bodyMedium)
+                        if (s.session.durationSeconds > 0)
+                            Text("时长：${formatDuration(s.session.durationSeconds)}", style = MaterialTheme.typography.bodyMedium)
+                        if (s.session.notes.isNotBlank()) Text("备注：${s.session.notes}")
+                        s.painRecords.forEach { pr ->
+                            Text("疼痛：${pr.location} ${pr.score}/10${if (pr.note.isNotBlank()) "（${pr.note}）" else ""}",
+                                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+            items(s.exercises) { ex ->
+                Card {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        val name = if (ex.exercise.weight < 0) "助力${ex.exercise.exerciseName}" else ex.exercise.exerciseName
+                        Text(name, style = MaterialTheme.typography.titleSmall)
+                        Text("${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps}次 × ${ex.exercise.totalSets}组" +
+                            (if (ex.exercise.restSeconds > 0) "，计划组间${ex.exercise.restSeconds}s" else ""),
+                            style = MaterialTheme.typography.bodySmall)
+                        if (ex.exercise.notes.isNotBlank()) Text("备注：${ex.exercise.notes}", style = MaterialTheme.typography.bodySmall)
+                        ex.equipmentProfile?.let { pr ->
+                            Text("器械：${pr.equipmentName.ifBlank { pr.exerciseName }}（${ex.gymName}）",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        ex.sets.forEach { set ->
+                            val mark = if (set.completed) "✓" else "✗"
+                            val f = if (!set.completed) "，力竭${set.failureReps}" else ""
+                            val d = if (set.durationSeconds > 0) "，用时${set.durationSeconds}s" else ""
+                            val r = if (set.restTakenSeconds > 0) "，组后休息${set.restTakenSeconds}s" else ""
+                            Text("第${set.setIndex}组：$mark 实际${set.actualReps}次$f$d$r",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(60.dp)) }
+        }
+    }
+}
+
+// ===================== 导出对话框 =====================
+
 @Composable
 fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
@@ -81,44 +361,36 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
                 Text("部位（不选 = 全部）")
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     BODY_PARTS.forEach { p ->
-                        FilterChip(
-                            selected = p in selectedParts,
+                        FilterChip(selected = p in selectedParts,
                             onClick = { selectedParts = if (p in selectedParts) selectedParts - p else selectedParts + p },
-                            label = { Text(p) }
-                        )
+                            label = { Text(p) })
                     }
                 }
             }
         },
         confirmButton = {
-            Button(
-                enabled = !busy,
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        try {
-                            val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                            val md = MarkdownExporter.build(
-                                sessions,
-                                rangeDesc = if (from.isBlank() && to.isBlank()) "全部"
-                                    else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
-                                partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
-                            )
-                            val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
-                            val file = File(dir, "训练记录_${System.currentTimeMillis()}.md")
-                            file.writeText(md)
-                            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/markdown"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            ctx.startActivity(Intent.createChooser(intent, "分享 Markdown"))
-                            onDismiss()
-                        } finally { busy = false }
-                    }
+            Button(enabled = !busy, onClick = {
+                scope.launch {
+                    busy = true
+                    try {
+                        val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+                        val md = MarkdownExporter.build(sessions,
+                            rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
+                            partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、"))
+                        val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
+                        val file = File(dir, "训练记录_${System.currentTimeMillis()}.md")
+                        file.writeText(md)
+                        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/markdown"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        ctx.startActivity(Intent.createChooser(intent, "分享 Markdown"))
+                        onDismiss()
+                    } finally { busy = false }
                 }
-            ) { Text(if (busy) "导出中..." else "导出") }
+            }) { Text(if (busy) "导出中..." else "导出") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
