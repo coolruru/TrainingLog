@@ -11,9 +11,13 @@ data class Session(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val date: String,
     val bodyPart: String,
-    val painLocation: String = "无",
-    val painScore: Int = 0,
+    val painLocation: String = "无",   // 旧字段，保留兼容
+    val painScore: Int = 0,            // 旧字段，保留兼容
     val notes: String = "",
+    val goal: String = "",
+    val startTime: Long = 0L,
+    val endTime: Long = 0L,
+    val durationSeconds: Int = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -36,7 +40,9 @@ data class ExerciseEntry(
     val totalSets: Int = 0,
     val notes: String = "",
     val isCoreAddon: Boolean = false,
-    val equipmentProfileId: Long? = null
+    val equipmentProfileId: Long? = null,
+    val restSeconds: Int = 0,
+    val orderIndex: Int = 0
 )
 
 @Entity(
@@ -55,7 +61,8 @@ data class SetEntry(
     val setIndex: Int,
     val completed: Boolean,
     val actualReps: Int,
-    val failureReps: Int
+    val failureReps: Int,
+    val durationSeconds: Int = 0
 )
 
 @Entity(
@@ -76,10 +83,7 @@ data class LegacyEquipmentPhoto(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(
-    tableName = "gyms",
-    indices = [Index(value = ["name"], unique = true)]
-)
+@Entity(tableName = "gyms", indices = [Index(value = ["name"], unique = true)])
 data class Gym(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -131,6 +135,71 @@ data class EquipmentProfilePhoto(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Entity(
+    tableName = "pain_records",
+    foreignKeys = [ForeignKey(
+        entity = Session::class,
+        parentColumns = ["id"],
+        childColumns = ["sessionId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("sessionId")]
+)
+data class PainRecord(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val location: String,
+    val score: Int,
+    val note: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "templates")
+data class WorkoutTemplate(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val bodyPart: String,
+    val goal: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "template_exercises",
+    foreignKeys = [ForeignKey(
+        entity = WorkoutTemplate::class,
+        parentColumns = ["id"],
+        childColumns = ["templateId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("templateId")]
+)
+data class TemplateExercise(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val templateId: Long,
+    val exerciseName: String,
+    val weight: Double,
+    val totalSets: Int,
+    val plannedReps: Int,
+    val restSeconds: Int,
+    val notes: String = "",
+    val orderIndex: Int = 0
+)
+
+data class TemplateExerciseItem(
+    val id: Long,
+    val exerciseName: String,
+    val weight: Double,
+    val totalSets: Int,
+    val plannedReps: Int,
+    val restSeconds: Int,
+    val notes: String
+)
+
+data class WorkoutTemplateWithExercises(
+    val template: WorkoutTemplate,
+    val exercises: List<TemplateExerciseItem>
+)
+
 data class ExerciseWithSets(
     val exercise: ExerciseEntry,
     val sets: List<SetEntry>,
@@ -141,7 +210,8 @@ data class ExerciseWithSets(
 
 data class SessionWithExercises(
     val session: Session,
-    val exercises: List<ExerciseWithSets>
+    val exercises: List<ExerciseWithSets>,
+    val painRecords: List<PainRecord> = emptyList()
 )
 
 data class EquipmentWithPhotos(
@@ -158,12 +228,6 @@ interface TrainingDao {
     @Query("SELECT * FROM sessions WHERE date = :date AND bodyPart = :part ORDER BY id ASC LIMIT 1")
     suspend fun getSessionByDateAndPart(date: String, part: String): Session?
 
-    @Query("SELECT * FROM sessions WHERE date = :date AND bodyPart != '核心' ORDER BY createdAt DESC LIMIT 1")
-    suspend fun getLatestNonCoreSessionOfDate(date: String): Session?
-
-    @Query("SELECT * FROM sessions WHERE date = :date ORDER BY createdAt DESC LIMIT 1")
-    suspend fun getLatestSessionOfDate(date: String): Session?
-
     @Query("SELECT * FROM sessions WHERE date >= :from AND date <= :to ORDER BY date ASC")
     suspend fun getBetween(from: String, to: String): List<Session>
 
@@ -178,7 +242,7 @@ interface TrainingDao {
     @Query("SELECT * FROM exercises ORDER BY id ASC")
     fun observeAllExercises(): Flow<List<ExerciseEntry>>
 
-    @Query("SELECT * FROM exercises WHERE sessionId = :sessionId ORDER BY id ASC")
+    @Query("SELECT * FROM exercises WHERE sessionId = :sessionId ORDER BY orderIndex ASC, id ASC")
     suspend fun getExercisesBySession(sessionId: Long): List<ExerciseEntry>
 
     @Query("SELECT * FROM exercises")
@@ -193,13 +257,18 @@ interface TrainingDao {
     @Query("SELECT * FROM sets")
     fun observeAllSets(): Flow<List<SetEntry>>
 
-    @Query("SELECT * FROM sets WHERE exerciseId IN (:exerciseIds)")
-    suspend fun getSetsByExerciseIds(exerciseIds: List<Long>): List<SetEntry>
-
     @Query("SELECT * FROM sets")
     suspend fun getAllSets(): List<SetEntry>
 
     @Insert suspend fun insertSets(sets: List<SetEntry>)
+
+    @Query("SELECT * FROM pain_records")
+    fun observeAllPainRecords(): Flow<List<PainRecord>>
+
+    @Query("SELECT * FROM pain_records")
+    suspend fun getAllPainRecords(): List<PainRecord>
+
+    @Insert suspend fun insertPainRecord(p: PainRecord): Long
 
     @Query("SELECT * FROM gyms ORDER BY createdAt ASC")
     fun observeGyms(): Flow<List<Gym>>
@@ -251,6 +320,33 @@ interface TrainingDao {
     @Insert suspend fun insertProfilePhoto(p: EquipmentProfilePhoto): Long
     @Query("DELETE FROM equipment_profile_photos WHERE id = :id")
     suspend fun deleteProfilePhoto(id: Long)
+
+    @Query("SELECT * FROM templates ORDER BY createdAt DESC")
+    fun observeTemplates(): Flow<List<WorkoutTemplate>>
+
+    @Query("SELECT * FROM templates ORDER BY createdAt DESC")
+    suspend fun getAllTemplates(): List<WorkoutTemplate>
+
+    @Query("SELECT * FROM templates WHERE id = :id")
+    suspend fun getTemplateById(id: Long): WorkoutTemplate?
+
+    @Query("SELECT * FROM template_exercises ORDER BY orderIndex ASC, id ASC")
+    fun observeAllTemplateExercises(): Flow<List<TemplateExercise>>
+
+    @Query("SELECT * FROM template_exercises")
+    suspend fun getAllTemplateExercises(): List<TemplateExercise>
+
+    @Query("SELECT * FROM template_exercises WHERE templateId = :templateId ORDER BY orderIndex ASC, id ASC")
+    suspend fun getTemplateExercises(templateId: Long): List<TemplateExercise>
+
+    @Insert suspend fun insertTemplate(t: WorkoutTemplate): Long
+    @Update suspend fun updateTemplate(t: WorkoutTemplate)
+    @Query("DELETE FROM templates WHERE id = :id")
+    suspend fun deleteTemplate(id: Long)
+
+    @Insert suspend fun insertTemplateExercise(e: TemplateExercise): Long
+    @Query("DELETE FROM template_exercises WHERE templateId = :templateId")
+    suspend fun deleteTemplateExercises(templateId: Long)
 }
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -320,13 +416,67 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE sessions ADD COLUMN startTime INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE sessions ADD COLUMN endTime INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE sessions ADD COLUMN durationSeconds INTEGER NOT NULL DEFAULT 0")
+
+        db.execSQL("ALTER TABLE exercises ADD COLUMN restSeconds INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE exercises ADD COLUMN orderIndex INTEGER NOT NULL DEFAULT 0")
+
+        db.execSQL("ALTER TABLE sets ADD COLUMN durationSeconds INTEGER NOT NULL DEFAULT 0")
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS pain_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                sessionId INTEGER NOT NULL,
+                location TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                createdAt INTEGER NOT NULL,
+                FOREIGN KEY(sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_pain_records_sessionId ON pain_records(sessionId)")
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                bodyPart TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                createdAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS template_exercises (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                templateId INTEGER NOT NULL,
+                exerciseName TEXT NOT NULL,
+                weight REAL NOT NULL,
+                totalSets INTEGER NOT NULL,
+                plannedReps INTEGER NOT NULL,
+                restSeconds INTEGER NOT NULL,
+                notes TEXT NOT NULL,
+                orderIndex INTEGER NOT NULL,
+                FOREIGN KEY(templateId) REFERENCES templates(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_template_exercises_templateId ON template_exercises(templateId)")
+    }
+}
+
 @Database(
     entities = [
         Session::class, ExerciseEntry::class, SetEntry::class,
         LegacyEquipmentPhoto::class,
-        Gym::class, EquipmentProfile::class, EquipmentProfilePhoto::class
+        Gym::class, EquipmentProfile::class, EquipmentProfilePhoto::class,
+        PainRecord::class, WorkoutTemplate::class, TemplateExercise::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -339,7 +489,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "training.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
             }
     }
 }
@@ -350,26 +500,31 @@ fun assembleSessions(
     sets: List<SetEntry>,
     profiles: List<EquipmentProfile>,
     profilePhotos: List<EquipmentProfilePhoto>,
-    gyms: List<Gym>
+    gyms: List<Gym>,
+    painRecords: List<PainRecord>
 ): List<SessionWithExercises> {
     val exBySession = exercises.groupBy { it.sessionId }
     val setsByExercise = sets.groupBy { it.exerciseId }
     val profileById = profiles.associateBy { it.id }
     val gymById = gyms.associateBy { it.id }
     val firstPhotoByProfile = profilePhotos.groupBy { it.profileId }.mapValues { it.value.firstOrNull() }
+    val painsBySession = painRecords.groupBy { it.sessionId }
     return sessions.map { s ->
         SessionWithExercises(
             s,
-            exBySession[s.id].orEmpty().map { ex ->
-                val profile = ex.equipmentProfileId?.let { profileById[it] }
-                ExerciseWithSets(
-                    ex,
-                    setsByExercise[ex.id].orEmpty(),
-                    profile,
-                    profile?.let { firstPhotoByProfile[it.id] },
-                    profile?.let { gymById[it.gymId]?.name } ?: ""
-                )
-            }
+            exBySession[s.id].orEmpty()
+                .sortedBy { it.orderIndex }
+                .map { ex ->
+                    val profile = ex.equipmentProfileId?.let { profileById[it] }
+                    ExerciseWithSets(
+                        ex,
+                        setsByExercise[ex.id].orEmpty().sortedBy { it.setIndex },
+                        profile,
+                        profile?.let { firstPhotoByProfile[it.id] },
+                        profile?.let { gymById[it.gymId]?.name } ?: ""
+                    )
+                },
+            painsBySession[s.id].orEmpty()
         )
     }
 }
@@ -383,5 +538,28 @@ fun assembleEquipment(
     val gymById = gyms.associateBy { it.id }
     return profiles.map { p ->
         EquipmentWithPhotos(p, photosByProfile[p.id].orEmpty(), gymById[p.gymId]?.name ?: "")
+    }
+}
+
+fun assembleTemplates(
+    templates: List<WorkoutTemplate>,
+    exercises: List<TemplateExercise>
+): List<WorkoutTemplateWithExercises> {
+    val byTemplate = exercises.groupBy { it.templateId }
+    return templates.map { t ->
+        WorkoutTemplateWithExercises(
+            t,
+            byTemplate[t.id].orEmpty().sortedBy { it.orderIndex }.map {
+                TemplateExerciseItem(
+                    id = it.id,
+                    exerciseName = it.exerciseName,
+                    weight = it.weight,
+                    totalSets = it.totalSets,
+                    plannedReps = it.plannedReps,
+                    restSeconds = it.restSeconds,
+                    notes = it.notes
+                )
+            }
+        )
     }
 }
