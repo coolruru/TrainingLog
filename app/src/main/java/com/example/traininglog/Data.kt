@@ -11,8 +11,8 @@ data class Session(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val date: String,
     val bodyPart: String,
-    val painLocation: String = "无",   // 旧字段，保留兼容
-    val painScore: Int = 0,            // 旧字段，保留兼容
+    val painLocation: String = "无",
+    val painScore: Int = 0,
     val notes: String = "",
     val goal: String = "",
     val startTime: Long = 0L,
@@ -24,10 +24,7 @@ data class Session(
 @Entity(
     tableName = "exercises",
     foreignKeys = [ForeignKey(
-        entity = Session::class,
-        parentColumns = ["id"],
-        childColumns = ["sessionId"],
-        onDelete = ForeignKey.CASCADE
+        entity = Session::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("sessionId")]
 )
@@ -48,10 +45,7 @@ data class ExerciseEntry(
 @Entity(
     tableName = "sets",
     foreignKeys = [ForeignKey(
-        entity = ExerciseEntry::class,
-        parentColumns = ["id"],
-        childColumns = ["exerciseId"],
-        onDelete = ForeignKey.CASCADE
+        entity = ExerciseEntry::class, parentColumns = ["id"], childColumns = ["exerciseId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("exerciseId")]
 )
@@ -62,16 +56,14 @@ data class SetEntry(
     val completed: Boolean,
     val actualReps: Int,
     val failureReps: Int,
-    val durationSeconds: Int = 0
+    val durationSeconds: Int = 0,
+    val restTakenSeconds: Int = 0
 )
 
 @Entity(
     tableName = "equipment_photos",
     foreignKeys = [ForeignKey(
-        entity = ExerciseEntry::class,
-        parentColumns = ["id"],
-        childColumns = ["exerciseId"],
-        onDelete = ForeignKey.CASCADE
+        entity = ExerciseEntry::class, parentColumns = ["id"], childColumns = ["exerciseId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("exerciseId")]
 )
@@ -93,10 +85,7 @@ data class Gym(
 @Entity(
     tableName = "equipment_profiles",
     foreignKeys = [ForeignKey(
-        entity = Gym::class,
-        parentColumns = ["id"],
-        childColumns = ["gymId"],
-        onDelete = ForeignKey.CASCADE
+        entity = Gym::class, parentColumns = ["id"], childColumns = ["gymId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("gymId")]
 )
@@ -120,10 +109,7 @@ data class EquipmentProfile(
 @Entity(
     tableName = "equipment_profile_photos",
     foreignKeys = [ForeignKey(
-        entity = EquipmentProfile::class,
-        parentColumns = ["id"],
-        childColumns = ["profileId"],
-        onDelete = ForeignKey.CASCADE
+        entity = EquipmentProfile::class, parentColumns = ["id"], childColumns = ["profileId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("profileId")]
 )
@@ -138,10 +124,7 @@ data class EquipmentProfilePhoto(
 @Entity(
     tableName = "pain_records",
     foreignKeys = [ForeignKey(
-        entity = Session::class,
-        parentColumns = ["id"],
-        childColumns = ["sessionId"],
-        onDelete = ForeignKey.CASCADE
+        entity = Session::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("sessionId")]
 )
@@ -166,10 +149,7 @@ data class WorkoutTemplate(
 @Entity(
     tableName = "template_exercises",
     foreignKeys = [ForeignKey(
-        entity = WorkoutTemplate::class,
-        parentColumns = ["id"],
-        childColumns = ["templateId"],
-        onDelete = ForeignKey.CASCADE
+        entity = WorkoutTemplate::class, parentColumns = ["id"], childColumns = ["templateId"], onDelete = ForeignKey.CASCADE
     )],
     indices = [Index("templateId")]
 )
@@ -224,16 +204,12 @@ data class EquipmentWithPhotos(
 interface TrainingDao {
     @Query("SELECT * FROM sessions ORDER BY date DESC, createdAt DESC")
     fun observeSessions(): Flow<List<Session>>
-
     @Query("SELECT * FROM sessions WHERE date = :date AND bodyPart = :part ORDER BY id ASC LIMIT 1")
     suspend fun getSessionByDateAndPart(date: String, part: String): Session?
-
     @Query("SELECT * FROM sessions WHERE date >= :from AND date <= :to ORDER BY date ASC")
     suspend fun getBetween(from: String, to: String): List<Session>
-
     @Query("SELECT * FROM sessions ORDER BY date ASC")
     suspend fun getAllSessions(): List<Session>
-
     @Insert suspend fun insertSession(s: Session): Long
     @Update suspend fun updateSession(s: Session)
     @Query("DELETE FROM sessions WHERE id = :id")
@@ -241,13 +217,10 @@ interface TrainingDao {
 
     @Query("SELECT * FROM exercises ORDER BY id ASC")
     fun observeAllExercises(): Flow<List<ExerciseEntry>>
-
     @Query("SELECT * FROM exercises WHERE sessionId = :sessionId ORDER BY orderIndex ASC, id ASC")
     suspend fun getExercisesBySession(sessionId: Long): List<ExerciseEntry>
-
     @Query("SELECT * FROM exercises")
     suspend fun getAllExercises(): List<ExerciseEntry>
-
     @Insert suspend fun insertExercise(e: ExerciseEntry): Long
     @Query("DELETE FROM exercises WHERE id = :id")
     suspend fun deleteExercise(id: Long)
@@ -256,29 +229,22 @@ interface TrainingDao {
 
     @Query("SELECT * FROM sets")
     fun observeAllSets(): Flow<List<SetEntry>>
-
     @Query("SELECT * FROM sets")
     suspend fun getAllSets(): List<SetEntry>
-
     @Insert suspend fun insertSets(sets: List<SetEntry>)
 
     @Query("SELECT * FROM pain_records")
     fun observeAllPainRecords(): Flow<List<PainRecord>>
-
     @Query("SELECT * FROM pain_records")
     suspend fun getAllPainRecords(): List<PainRecord>
-
     @Insert suspend fun insertPainRecord(p: PainRecord): Long
 
     @Query("SELECT * FROM gyms ORDER BY createdAt ASC")
     fun observeGyms(): Flow<List<Gym>>
-
     @Query("SELECT * FROM gyms WHERE name = :name LIMIT 1")
     suspend fun findGymByName(name: String): Gym?
-
     @Query("SELECT * FROM gyms ORDER BY createdAt ASC")
     suspend fun getAllGyms(): List<Gym>
-
     @Insert suspend fun insertGym(g: Gym): Long
     @Query("DELETE FROM gyms WHERE id = :id")
     suspend fun deleteGym(id: Long)
@@ -287,16 +253,12 @@ interface TrainingDao {
 
     @Query("SELECT * FROM equipment_profiles WHERE gymId = :gymId ORDER BY createdAt DESC")
     fun observeProfilesByGym(gymId: Long): Flow<List<EquipmentProfile>>
-
     @Query("SELECT * FROM equipment_profiles ORDER BY createdAt DESC")
     fun observeAllProfiles(): Flow<List<EquipmentProfile>>
-
     @Query("SELECT * FROM equipment_profiles")
     suspend fun getAllProfiles(): List<EquipmentProfile>
-
     @Query("SELECT * FROM equipment_profiles WHERE id = :id")
     suspend fun getProfileById(id: Long): EquipmentProfile?
-
     @Insert suspend fun insertProfile(p: EquipmentProfile): Long
     @Update suspend fun updateProfile(p: EquipmentProfile)
     @Query("DELETE FROM equipment_profiles WHERE id = :id")
@@ -304,46 +266,26 @@ interface TrainingDao {
 
     @Query("SELECT * FROM equipment_profile_photos")
     fun observeAllProfilePhotos(): Flow<List<EquipmentProfilePhoto>>
-
     @Query("SELECT * FROM equipment_profile_photos WHERE profileId = :profileId ORDER BY createdAt ASC")
     fun observePhotosByProfile(profileId: Long): Flow<List<EquipmentProfilePhoto>>
-
-    @Query("SELECT * FROM equipment_profile_photos WHERE profileId IN (:profileIds)")
-    suspend fun getPhotosByProfileIds(profileIds: List<Long>): List<EquipmentProfilePhoto>
-
     @Query("SELECT * FROM equipment_profile_photos")
     suspend fun getAllProfilePhotos(): List<EquipmentProfilePhoto>
-
     @Query("SELECT * FROM equipment_profile_photos WHERE profileId = :profileId")
     suspend fun getPhotosByProfile(profileId: Long): List<EquipmentProfilePhoto>
-
     @Insert suspend fun insertProfilePhoto(p: EquipmentProfilePhoto): Long
     @Query("DELETE FROM equipment_profile_photos WHERE id = :id")
     suspend fun deleteProfilePhoto(id: Long)
 
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
     fun observeTemplates(): Flow<List<WorkoutTemplate>>
-
-    @Query("SELECT * FROM templates ORDER BY createdAt DESC")
-    suspend fun getAllTemplates(): List<WorkoutTemplate>
-
-    @Query("SELECT * FROM templates WHERE id = :id")
-    suspend fun getTemplateById(id: Long): WorkoutTemplate?
-
     @Query("SELECT * FROM template_exercises ORDER BY orderIndex ASC, id ASC")
     fun observeAllTemplateExercises(): Flow<List<TemplateExercise>>
-
-    @Query("SELECT * FROM template_exercises")
-    suspend fun getAllTemplateExercises(): List<TemplateExercise>
-
     @Query("SELECT * FROM template_exercises WHERE templateId = :templateId ORDER BY orderIndex ASC, id ASC")
     suspend fun getTemplateExercises(templateId: Long): List<TemplateExercise>
-
     @Insert suspend fun insertTemplate(t: WorkoutTemplate): Long
     @Update suspend fun updateTemplate(t: WorkoutTemplate)
     @Query("DELETE FROM templates WHERE id = :id")
     suspend fun deleteTemplate(id: Long)
-
     @Insert suspend fun insertTemplateExercise(e: TemplateExercise): Long
     @Query("DELETE FROM template_exercises WHERE templateId = :templateId")
     suspend fun deleteTemplateExercises(templateId: Long)
@@ -351,8 +293,7 @@ interface TrainingDao {
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL(
-            """
+        db.execSQL("""
             CREATE TABLE IF NOT EXISTS equipment_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                 exerciseId INTEGER NOT NULL,
@@ -361,8 +302,7 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
                 createdAt INTEGER NOT NULL,
                 FOREIGN KEY(exerciseId) REFERENCES exercises(id) ON DELETE CASCADE
             )
-            """.trimIndent()
-        )
+        """.trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS index_equipment_photos_exerciseId ON equipment_photos(exerciseId)")
     }
 }
@@ -377,7 +317,6 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
             )
         """.trimIndent())
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_gyms_name ON gyms(name)")
-
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS equipment_profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -398,7 +337,6 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS index_equipment_profiles_gymId ON equipment_profiles(gymId)")
-
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS equipment_profile_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -410,7 +348,6 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS index_equipment_profile_photos_profileId ON equipment_profile_photos(profileId)")
-
         db.execSQL("ALTER TABLE exercises ADD COLUMN isCoreAddon INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE exercises ADD COLUMN equipmentProfileId INTEGER")
     }
@@ -422,12 +359,9 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("ALTER TABLE sessions ADD COLUMN startTime INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE sessions ADD COLUMN endTime INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE sessions ADD COLUMN durationSeconds INTEGER NOT NULL DEFAULT 0")
-
         db.execSQL("ALTER TABLE exercises ADD COLUMN restSeconds INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE exercises ADD COLUMN orderIndex INTEGER NOT NULL DEFAULT 0")
-
         db.execSQL("ALTER TABLE sets ADD COLUMN durationSeconds INTEGER NOT NULL DEFAULT 0")
-
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS pain_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -440,7 +374,6 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX IF NOT EXISTS index_pain_records_sessionId ON pain_records(sessionId)")
-
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -450,7 +383,6 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
                 createdAt INTEGER NOT NULL
             )
         """.trimIndent())
-
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS template_exercises (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -469,6 +401,12 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE sets ADD COLUMN restTakenSeconds INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [
         Session::class, ExerciseEntry::class, SetEntry::class,
@@ -476,7 +414,7 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         Gym::class, EquipmentProfile::class, EquipmentProfilePhoto::class,
         PainRecord::class, WorkoutTemplate::class, TemplateExercise::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -489,7 +427,8 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "training.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .build().also { INSTANCE = it }
             }
     }
 }
@@ -507,23 +446,21 @@ fun assembleSessions(
     val setsByExercise = sets.groupBy { it.exerciseId }
     val profileById = profiles.associateBy { it.id }
     val gymById = gyms.associateBy { it.id }
-    val firstPhotoByProfile = profilePhotos.groupBy { it.profileId }.mapValues { it.value.firstOrNull() }
+    val firstPhoto = profilePhotos.groupBy { it.profileId }.mapValues { it.value.firstOrNull() }
     val painsBySession = painRecords.groupBy { it.sessionId }
     return sessions.map { s ->
         SessionWithExercises(
             s,
-            exBySession[s.id].orEmpty()
-                .sortedBy { it.orderIndex }
-                .map { ex ->
-                    val profile = ex.equipmentProfileId?.let { profileById[it] }
-                    ExerciseWithSets(
-                        ex,
-                        setsByExercise[ex.id].orEmpty().sortedBy { it.setIndex },
-                        profile,
-                        profile?.let { firstPhotoByProfile[it.id] },
-                        profile?.let { gymById[it.gymId]?.name } ?: ""
-                    )
-                },
+            exBySession[s.id].orEmpty().sortedBy { it.orderIndex }.map { ex ->
+                val profile = ex.equipmentProfileId?.let { profileById[it] }
+                ExerciseWithSets(
+                    ex,
+                    setsByExercise[ex.id].orEmpty().sortedBy { it.setIndex },
+                    profile,
+                    profile?.let { firstPhoto[it.id] },
+                    profile?.let { gymById[it.gymId]?.name } ?: ""
+                )
+            },
             painsBySession[s.id].orEmpty()
         )
     }
@@ -550,15 +487,7 @@ fun assembleTemplates(
         WorkoutTemplateWithExercises(
             t,
             byTemplate[t.id].orEmpty().sortedBy { it.orderIndex }.map {
-                TemplateExerciseItem(
-                    id = it.id,
-                    exerciseName = it.exerciseName,
-                    weight = it.weight,
-                    totalSets = it.totalSets,
-                    plannedReps = it.plannedReps,
-                    restSeconds = it.restSeconds,
-                    notes = it.notes
-                )
+                TemplateExerciseItem(it.id, it.exerciseName, it.weight, it.totalSets, it.plannedReps, it.restSeconds, it.notes)
             }
         )
     }
