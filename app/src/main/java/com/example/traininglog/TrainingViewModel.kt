@@ -18,7 +18,8 @@ data class ActiveBlock(
     val startMs: Long = 0L,
     val endMs: Long = 0L,
     val actualReps: Int = 0,
-    val failureReps: Int = 0
+    val failureReps: Int = 0,
+    val restTakenMs: Long = 0L
 )
 
 data class ActiveExercise(
@@ -50,14 +51,10 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
 
     val sessions: StateFlow<List<SessionWithExercises>> = combine(
         combine(
-            dao.observeSessions(),
-            dao.observeAllExercises(),
-            dao.observeAllSets()
+            dao.observeSessions(), dao.observeAllExercises(), dao.observeAllSets()
         ) { s, e, st -> Triple(s, e, st) },
         combine(
-            dao.observeAllProfiles(),
-            dao.observeAllProfilePhotos(),
-            dao.observeGyms()
+            dao.observeAllProfiles(), dao.observeAllProfilePhotos(), dao.observeGyms()
         ) { p, ph, g -> Triple(p, ph, g) },
         dao.observeAllPainRecords()
     ) { (s, e, st), (p, ph, g), pr ->
@@ -68,33 +65,23 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val templates: StateFlow<List<WorkoutTemplateWithExercises>> = combine(
-        dao.observeTemplates(),
-        dao.observeAllTemplateExercises()
+        dao.observeTemplates(), dao.observeAllTemplateExercises()
     ) { t, e -> assembleTemplates(t, e) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _activeWorkout = MutableStateFlow<ActiveWorkout?>(null)
     val activeWorkout: StateFlow<ActiveWorkout?> = _activeWorkout
 
-    // ===== 执行 =====
-
     fun startWorkout(plan: WorkoutPlan) {
         _activeWorkout.value = ActiveWorkout(
-            date = plan.date,
-            bodyPart = plan.bodyPart,
-            goal = plan.goal,
-            sessionNotes = plan.sessionNotes,
-            startMs = System.currentTimeMillis(),
+            date = plan.date, bodyPart = plan.bodyPart, goal = plan.goal,
+            sessionNotes = plan.sessionNotes, startMs = System.currentTimeMillis(),
             exercises = plan.exercises.map { ep ->
                 ActiveExercise(
-                    exerciseName = ep.exerciseName,
-                    weight = ep.weight,
-                    plannedReps = ep.plannedReps,
-                    totalSets = ep.totalSets,
-                    restSeconds = ep.restSeconds,
-                    notes = ep.notes,
-                    isCoreAddon = ep.isCoreAddon,
-                    equipmentProfileId = ep.equipmentProfileId,
+                    exerciseName = ep.exerciseName, weight = ep.weight,
+                    plannedReps = ep.plannedReps, totalSets = ep.totalSets,
+                    restSeconds = ep.restSeconds, notes = ep.notes,
+                    isCoreAddon = ep.isCoreAddon, equipmentProfileId = ep.equipmentProfileId,
                     blocks = (1..ep.totalSets).map { i ->
                         ActiveBlock(setIndex = i, status = BlockStatus.IDLE, actualReps = ep.plannedReps)
                     }
@@ -109,14 +96,56 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         val ex = w.exercises.getOrNull(exIdx) ?: return
         val block = ex.blocks.getOrNull(setIdx) ?: return
         val now = System.currentTimeMillis()
-        val newBlock = when (block.status) {
-            BlockStatus.IDLE -> block.copy(status = BlockStatus.RUNNING, startMs = now, actualReps = ex.plannedReps)
-            BlockStatus.RUNNING -> block.copy(status = BlockStatus.DONE, endMs = now)
+        when (block.status) {
+            BlockStatus.IDLE -> {
+                // 找到上一个已完成/未完成方块（跨动作）
+                val prev = findPrevCompleted(w, exIdx, setIdx)
+                var newW = w
+                if (prev != null) {
+                    val (pe, pi) = prev
+                    val prevEx = newW.exercises[pe]
+                    val prevBlock = prevEx.blocks[pi]
+                    if (prevBlock.endMs > 0) {
+                        val updatedPrevBlock = prevBlock.copy(restTakenMs = now - prevBlock.endMs)
+                        val updatedPrevEx = prevEx.copy(
+                            blocks = prevEx.blocks.toMutableList().also { it[pi] = updatedPrevBlock }
+                        )
+                        newW = newW.copy(
+                            exercises = newW.exercises.toMutableList().also { it[pe] = updatedPrevEx }
+                        )
+                    }
+                }
+                val curEx = newW.exercises[exIdx]
+                val curBlock = curEx.blocks[setIdx]
+                val newBlock = curBlock.copy(status = BlockStatus.RUNNING, startMs = now, actualReps = curEx.plannedReps)
+                val newEx = curEx.copy(blocks = curEx.blocks.toMutableList().also { it[setIdx] = newBlock })
+                _activeWorkout.value = newW.copy(exercises = newW.exercises.toMutableList().also { it[exIdx] = newEx })
+            }
+            BlockStatus.RUNNING -> {
+                val newBlock = block.copy(status = BlockStatus.DONE, endMs = now)
+                val newEx = ex.copy(blocks = ex.blocks.toMutableList().also { it[setIdx] = newBlock })
+                _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
+            }
             else -> return
         }
-        val newEx = ex.copy(blocks = ex.blocks.toMutableList().also { it[setIdx] = newBlock })
-        val newW = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
-        _activeWorkout.value = newW
+    }
+
+    private fun findPrevCompleted(w: ActiveWorkout, exIdx: Int, setIdx: Int): Pair<Int, Int>? {
+        // 同动作内往前
+        for (i in setIdx - 1 downTo 0) {
+            val b = w.exercises[exIdx].blocks[i]
+            if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) return exIdx to i
+        }
+        // 上一动作往前
+        for (e in exIdx - 1 downTo 0) {
+            val ex = w.exercises[e]
+            if (ex.skipped) continue
+            for (i in ex.blocks.indices.reversed()) {
+                val b = ex.blocks[i]
+                if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) return e to i
+            }
+        }
+        return null
     }
 
     fun markBlockFailed(exIdx: Int, setIdx: Int, actualReps: Int, failureReps: Int) {
@@ -124,27 +153,18 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         val ex = w.exercises.getOrNull(exIdx) ?: return
         val block = ex.blocks.getOrNull(setIdx) ?: return
         if (block.status != BlockStatus.RUNNING) return
-        val now = System.currentTimeMillis()
-        val newBlock = block.copy(
-            status = BlockStatus.FAILED, endMs = now,
-            actualReps = actualReps, failureReps = failureReps
-        )
+        val newBlock = block.copy(status = BlockStatus.FAILED, endMs = System.currentTimeMillis(),
+            actualReps = actualReps, failureReps = failureReps)
         val newEx = ex.copy(blocks = ex.blocks.toMutableList().also { it[setIdx] = newBlock })
-        val newW = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
-        _activeWorkout.value = newW
+        _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
     }
 
     fun addExerciseDuringWorkout(ep: ExercisePlan) {
         val w = _activeWorkout.value ?: return
         val newEx = ActiveExercise(
-            exerciseName = ep.exerciseName,
-            weight = ep.weight,
-            plannedReps = ep.plannedReps,
-            totalSets = ep.totalSets,
-            restSeconds = ep.restSeconds,
-            notes = ep.notes,
-            isCoreAddon = ep.isCoreAddon,
-            equipmentProfileId = ep.equipmentProfileId,
+            exerciseName = ep.exerciseName, weight = ep.weight, plannedReps = ep.plannedReps,
+            totalSets = ep.totalSets, restSeconds = ep.restSeconds, notes = ep.notes,
+            isCoreAddon = ep.isCoreAddon, equipmentProfileId = ep.equipmentProfileId,
             blocks = (1..ep.totalSets).map { i -> ActiveBlock(setIndex = i, status = BlockStatus.IDLE, actualReps = ep.plannedReps) }
         )
         _activeWorkout.value = w.copy(exercises = w.exercises + newEx)
@@ -153,8 +173,7 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
     fun skipExercise(exIdx: Int) {
         val w = _activeWorkout.value ?: return
         val ex = w.exercises.getOrNull(exIdx) ?: return
-        val newEx = ex.copy(skipped = true)
-        _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
+        _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = ex.copy(skipped = true) })
     }
 
     fun addPainRecord(location: String, score: Int, note: String) {
@@ -179,42 +198,28 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
             existing.id
         } else {
             dao.insertSession(Session(
-                date = w.date,
-                bodyPart = w.bodyPart,
-                goal = w.goal,
-                notes = w.sessionNotes,
-                startTime = w.startMs,
-                endTime = endMs,
-                durationSeconds = duration,
-                createdAt = w.startMs
+                date = w.date, bodyPart = w.bodyPart, goal = w.goal, notes = w.sessionNotes,
+                startTime = w.startMs, endTime = endMs, durationSeconds = duration, createdAt = w.startMs
             ))
         }
 
         w.exercises.forEachIndexed { exIdx, ex ->
             if (ex.skipped) return@forEachIndexed
             val exId = dao.insertExercise(ExerciseEntry(
-                sessionId = sessionId,
-                exerciseName = ex.exerciseName,
-                weight = ex.weight,
-                plannedReps = ex.plannedReps,
-                totalSets = ex.totalSets,
-                notes = ex.notes,
-                isCoreAddon = ex.isCoreAddon,
-                equipmentProfileId = ex.equipmentProfileId,
-                restSeconds = ex.restSeconds,
-                orderIndex = exIdx
+                sessionId = sessionId, exerciseName = ex.exerciseName, weight = ex.weight,
+                plannedReps = ex.plannedReps, totalSets = ex.totalSets, notes = ex.notes,
+                isCoreAddon = ex.isCoreAddon, equipmentProfileId = ex.equipmentProfileId,
+                restSeconds = ex.restSeconds, orderIndex = exIdx
             ))
-            val sets = ex.blocks.map { b ->
+            dao.insertSets(ex.blocks.map { b ->
                 SetEntry(
-                    exerciseId = exId,
-                    setIndex = b.setIndex,
+                    exerciseId = exId, setIndex = b.setIndex,
                     completed = b.status == BlockStatus.DONE,
-                    actualReps = b.actualReps,
-                    failureReps = b.failureReps,
-                    durationSeconds = if (b.endMs > 0 && b.startMs > 0) ((b.endMs - b.startMs) / 1000).toInt() else 0
+                    actualReps = b.actualReps, failureReps = b.failureReps,
+                    durationSeconds = if (b.endMs > 0 && b.startMs > 0) ((b.endMs - b.startMs) / 1000).toInt() else 0,
+                    restTakenSeconds = (b.restTakenMs / 1000).toInt()
                 )
-            }
-            dao.insertSets(sets)
+            })
         }
 
         w.painRecords.forEach { pr ->
@@ -226,8 +231,6 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
 
     fun cancelWorkout() { _activeWorkout.value = null }
 
-    // ===== 添加记录（不进入计时，直接落库） =====
-
     fun addRecordDirectly(plan: WorkoutPlan) = viewModelScope.launch {
         val now = System.currentTimeMillis()
         val existing = dao.getSessionByDateAndPart(plan.date, plan.bodyPart)
@@ -238,64 +241,30 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
             ))
             existing.id
         } else {
-            dao.insertSession(Session(
-                date = plan.date,
-                bodyPart = plan.bodyPart,
-                goal = plan.goal,
-                notes = plan.sessionNotes,
-                createdAt = now
-            ))
+            dao.insertSession(Session(date = plan.date, bodyPart = plan.bodyPart,
+                goal = plan.goal, notes = plan.sessionNotes, createdAt = now))
         }
         plan.exercises.forEachIndexed { idx, ep ->
             val exId = dao.insertExercise(ExerciseEntry(
-                sessionId = sessionId,
-                exerciseName = ep.exerciseName,
-                weight = ep.weight,
-                plannedReps = ep.plannedReps,
-                totalSets = ep.totalSets,
-                notes = ep.notes,
-                isCoreAddon = ep.isCoreAddon,
-                equipmentProfileId = ep.equipmentProfileId,
-                restSeconds = ep.restSeconds,
-                orderIndex = idx
+                sessionId = sessionId, exerciseName = ep.exerciseName, weight = ep.weight,
+                plannedReps = ep.plannedReps, totalSets = ep.totalSets, notes = ep.notes,
+                isCoreAddon = ep.isCoreAddon, equipmentProfileId = ep.equipmentProfileId,
+                restSeconds = ep.restSeconds, orderIndex = idx
             ))
             dao.insertSets((1..ep.totalSets).map { i ->
-                SetEntry(exerciseId = exId, setIndex = i, completed = true, actualReps = ep.plannedReps, failureReps = 0)
+                SetEntry(exerciseId = exId, setIndex = i, completed = true,
+                    actualReps = ep.plannedReps, failureReps = 0)
             })
         }
     }
-
-    // ===== 模板 =====
 
     fun saveTemplate(name: String, bodyPart: String, goal: String, exercises: List<ExercisePlan>) = viewModelScope.launch {
         val tid = dao.insertTemplate(WorkoutTemplate(name = name, bodyPart = bodyPart, goal = goal))
         exercises.forEachIndexed { idx, ep ->
             dao.insertTemplateExercise(TemplateExercise(
-                templateId = tid,
-                exerciseName = ep.exerciseName,
-                weight = ep.weight,
-                totalSets = ep.totalSets,
-                plannedReps = ep.plannedReps,
-                restSeconds = ep.restSeconds,
-                notes = ep.notes,
-                orderIndex = idx
-            ))
-        }
-    }
-
-    fun updateTemplate(templateId: Long, name: String, bodyPart: String, goal: String, exercises: List<ExercisePlan>) = viewModelScope.launch {
-        dao.updateTemplate(WorkoutTemplate(id = templateId, name = name, bodyPart = bodyPart, goal = goal, createdAt = System.currentTimeMillis()))
-        dao.deleteTemplateExercises(templateId)
-        exercises.forEachIndexed { idx, ep ->
-            dao.insertTemplateExercise(TemplateExercise(
-                templateId = templateId,
-                exerciseName = ep.exerciseName,
-                weight = ep.weight,
-                totalSets = ep.totalSets,
-                plannedReps = ep.plannedReps,
-                restSeconds = ep.restSeconds,
-                notes = ep.notes,
-                orderIndex = idx
+                templateId = tid, exerciseName = ep.exerciseName, weight = ep.weight,
+                totalSets = ep.totalSets, plannedReps = ep.plannedReps,
+                restSeconds = ep.restSeconds, notes = ep.notes, orderIndex = idx
             ))
         }
     }
@@ -303,35 +272,27 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
     fun deleteTemplate(id: Long) = viewModelScope.launch { dao.deleteTemplate(id) }
 
     fun duplicateTemplate(t: WorkoutTemplateWithExercises) = viewModelScope.launch {
-        val all = dao.getAllTemplates()
+        val all = dao.observeTemplates().let { }
+        val current = templates.value.map { it.template.name }.toSet()
         val base = t.template.name
         var n = 2
         var newName: String
-        do {
-            newName = "$base$n"; n++
-        } while (all.any { it.name == newName })
+        do { newName = "$base$n"; n++ } while (newName in current)
         val newId = dao.insertTemplate(WorkoutTemplate(name = newName, bodyPart = t.template.bodyPart, goal = t.template.goal))
         t.exercises.forEachIndexed { idx, ex ->
             dao.insertTemplateExercise(TemplateExercise(
-                templateId = newId,
-                exerciseName = ex.exerciseName,
-                weight = ex.weight,
-                totalSets = ex.totalSets,
-                plannedReps = ex.plannedReps,
-                restSeconds = ex.restSeconds,
-                notes = ex.notes,
-                orderIndex = idx
+                templateId = newId, exerciseName = ex.exerciseName, weight = ex.weight,
+                totalSets = ex.totalSets, plannedReps = ex.plannedReps,
+                restSeconds = ex.restSeconds, notes = ex.notes, orderIndex = idx
             ))
         }
     }
 
-    suspend fun getTemplateExercises(templateId: Long): List<TemplateExercise> = dao.getTemplateExercises(templateId)
-
-    // ===== 器械（沿用）=====
+    suspend fun getTemplateExercises(templateId: Long) = dao.getTemplateExercises(templateId)
 
     fun addGym(name: String) = viewModelScope.launch {
-        val trimmed = name.trim(); if (trimmed.isEmpty()) return@launch
-        if (dao.findGymByName(trimmed) == null) dao.insertGym(Gym(name = trimmed))
+        val t = name.trim(); if (t.isEmpty()) return@launch
+        if (dao.findGymByName(t) == null) dao.insertGym(Gym(name = t))
     }
     fun deleteGym(gym: Gym) = viewModelScope.launch {
         if (dao.countProfilesInGym(gym.id) > 0) return@launch
