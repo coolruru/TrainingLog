@@ -3,6 +3,7 @@ package com.example.traininglog
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,8 +19,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
-import java.io.File
-import androidx.activity.compose.BackHandler
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,9 +54,9 @@ fun MainScreen(
     val titles = listOf("训练", "历史", "器械", "模板", "设置")
     var historyMenuOpen by remember { mutableStateOf(false) }
 
-    if (tab != 0) {
-    androidx.activity.compose.BackHandler { tab = 0 }
-}
+    // 非训练 tab 时，系统返回回到训练 tab
+    BackHandler(enabled = tab != 0) { tab = 0 }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -106,8 +105,10 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var showHelp by remember { mutableStateOf(false) }
-    var showExport by remember { mutableStateOf(false) }
     var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    // 帮助页打开时，系统返回先关闭帮助页
+    BackHandler(enabled = showHelp) { showHelp = false }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) importUri = uri
@@ -129,7 +130,8 @@ fun SettingsScreen(
         val u = importUri ?: return@LaunchedEffect
         val res = vm.importFrom(ctx, u)
         snackbar.showSnackbar(
-            if (res.success) "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
+            if (res.success)
+                "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
             else "导入失败：${res.message}"
         )
         importUri = null
@@ -152,6 +154,7 @@ fun SettingsScreen(
                     Text(m.label)
                 }
             }
+
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             Text("数据备份与恢复", style = MaterialTheme.typography.titleMedium)
@@ -192,12 +195,17 @@ fun SettingsScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HelpScreen(onBack: () -> Unit) {
+    BackHandler { onBack() }
     Scaffold(topBar = {
-        TopAppBar(title = { Text("使用说明") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } })
+        TopAppBar(
+            title = { Text("使用说明") },
+            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } }
+        )
     }) { p ->
-        Column(Modifier.padding(p).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier.padding(p).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Text("重量输入", style = MaterialTheme.typography.titleMedium)
             Text("空或 0 = 自重；正数 = 负重（kg）；负数 = 助力（kg）。")
             Text("例：卧推写 80 → 80kg；引体写 -40 → 助力40kg；俯卧撑写 0 → 自重。")
