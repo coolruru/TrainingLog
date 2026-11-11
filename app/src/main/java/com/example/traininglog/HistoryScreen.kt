@@ -32,12 +32,14 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 
 @Composable
-fun HistoryScreen(vm: TrainingViewModel) {
+fun HistoryScreen(
+    vm: TrainingViewModel,
+    onOpenDetail: (SessionWithExercises) -> Unit
+) {
     val all by vm.sessions.collectAsState()
     var viewMode by remember { mutableStateOf(0) }
     var showExportMenu by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
-    var detail by remember { mutableStateOf<SessionWithExercises?>(null) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -52,8 +54,7 @@ fun HistoryScreen(vm: TrainingViewModel) {
             scope.launch {
                 val res = vm.importFrom(ctx, uri)
                 snackbar.showSnackbar(
-                    if (res.success)
-                        "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
+                    if (res.success) "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
                     else "导入失败：${res.message}"
                 )
             }
@@ -61,29 +62,15 @@ fun HistoryScreen(vm: TrainingViewModel) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        if (detail != null) {
-            SessionDetailScreen(
-                detail!!,
-                onBack = { detail = null },
-                onLongPress = { pendingSessionMenu = it }
-            )
-        } else {
-            Column(Modifier.fillMaxSize()) {
-                TabRow(selectedTabIndex = viewMode) {
-                    Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
-                    Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
-                }
-                if (viewMode == 0) {
-                    CalendarView(all,
-                        onPickSession = { detail = it },
-                        onLongPressSession = { pendingSessionMenu = it }
-                    )
-                } else {
-                    ListView(all,
-                        onPickSession = { detail = it },
-                        onLongPressSession = { pendingSessionMenu = it }
-                    )
-                }
+        Column(Modifier.fillMaxSize()) {
+            TabRow(selectedTabIndex = viewMode) {
+                Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
+                Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
+            }
+            if (viewMode == 0) {
+                CalendarView(all, onPickSession = { onOpenDetail(it) }, onLongPressSession = { pendingSessionMenu = it })
+            } else {
+                ListView(all, onPickSession = { onOpenDetail(it) }, onLongPressSession = { pendingSessionMenu = it })
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
@@ -95,8 +82,7 @@ fun HistoryScreen(vm: TrainingViewModel) {
             title = { Text("数据") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { showExportMenu = false; showExportDialog = true },
-                        modifier = Modifier.fillMaxWidth()) { Text("导出") }
+                    TextButton(onClick = { showExportMenu = false; showExportDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("导出") }
                     TextButton(onClick = {
                         showExportMenu = false
                         importLauncher.launch(arrayOf("application/json", "application/zip", "*/*"))
@@ -115,24 +101,12 @@ fun HistoryScreen(vm: TrainingViewModel) {
         Dialog(onDismissRequest = { pendingSessionMenu = null }) {
             Card(Modifier.fillMaxWidth().padding(16.dp)) {
                 Column(Modifier.padding(8.dp)) {
-                    Text(
-                        "${s.session.date}｜${s.session.bodyPart}",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
-                    )
+                    Text("${s.session.date}｜${s.session.bodyPart}", style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp))
                     HorizontalDivider()
-                    TextButton(
-                        onClick = { showTemplateNameDialog = s; pendingSessionMenu = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("保存为模板") }
-                    TextButton(
-                        onClick = { pendingDelete = s; pendingSessionMenu = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
-                    TextButton(
-                        onClick = { pendingSessionMenu = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("取消") }
+                    TextButton(onClick = { showTemplateNameDialog = s; pendingSessionMenu = null }, modifier = Modifier.fillMaxWidth()) { Text("保存为模板") }
+                    TextButton(onClick = { pendingDelete = s; pendingSessionMenu = null }, modifier = Modifier.fillMaxWidth()) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { pendingSessionMenu = null }, modifier = Modifier.fillMaxWidth()) { Text("取消") }
                 }
             }
         }
@@ -143,12 +117,7 @@ fun HistoryScreen(vm: TrainingViewModel) {
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除训练记录") },
             text = { Text("确认删除 ${s.session.date}｜${s.session.bodyPart} 的训练记录？删除后不可恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.deleteSession(s.session.id)
-                    pendingDelete = null
-                }) { Text("删除") }
-            },
+            confirmButton = { TextButton(onClick = { vm.deleteSession(s.session.id); pendingDelete = null }) { Text("删除") } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
         )
     }
@@ -157,19 +126,13 @@ fun HistoryScreen(vm: TrainingViewModel) {
         AlertDialog(
             onDismissRequest = { showTemplateNameDialog = null },
             title = { Text("保存为模板") },
-            text = {
-                OutlinedTextField(
-                    value = templateName, onValueChange = { templateName = it },
-                    label = { Text("模板名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-            },
+            text = { OutlinedTextField(value = templateName, onValueChange = { templateName = it }, label = { Text("模板名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
             confirmButton = {
                 TextButton(onClick = {
                     if (templateName.isNotBlank()) {
                         vm.saveSessionAsTemplate(s, templateName)
                         scope.launch { snackbar.showSnackbar("已保存为模板") }
-                        templateName = ""
-                        showTemplateNameDialog = null
+                        templateName = ""; showTemplateNameDialog = null
                     }
                 }) { Text("保存") }
             },
@@ -177,8 +140,6 @@ fun HistoryScreen(vm: TrainingViewModel) {
         )
     }
 }
-
-// ===================== 日历视图 =====================
 
 @Composable
 private fun CalendarView(
@@ -219,16 +180,9 @@ private fun CalendarView(
                 }
             }) { Text("‹") }
             Text(
-                when (level) {
-                    0 -> "${year}年${month}月"
-                    1 -> "${year}年"
-                    else -> ""
-                },
+                when (level) { 0 -> "${year}年${month}月"; 1 -> "${year}年"; else -> "" },
                 modifier = Modifier.clickable {
-                    when (level) {
-                        0 -> level = 1
-                        1 -> { decadeStart = year - 4; level = 2 }
-                    }
+                    when (level) { 0 -> level = 1; 1 -> { decadeStart = year - 4; level = 2 } }
                 },
                 style = MaterialTheme.typography.titleMedium
             )
@@ -248,15 +202,10 @@ private fun CalendarView(
         }
 
         Box(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-            TextButton(
-                onClick = {
-                    year = today.get(Calendar.YEAR)
-                    month = today.get(Calendar.MONTH) + 1
-                    selectedDay = today.get(Calendar.DAY_OF_MONTH)
-                    level = 0
-                },
-                modifier = Modifier.align(Alignment.CenterEnd)
-            ) { Text("今") }
+            TextButton(onClick = {
+                year = today.get(Calendar.YEAR); month = today.get(Calendar.MONTH) + 1
+                selectedDay = today.get(Calendar.DAY_OF_MONTH); level = 0
+            }, modifier = Modifier.align(Alignment.CenterEnd)) { Text("今") }
         }
 
         if (level == 0 && selectedDay != null) {
@@ -267,10 +216,7 @@ private fun CalendarView(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
                     items(list) { s ->
-                        SessionSummaryRow(s,
-                            onClick = { onPickSession(s) },
-                            onLongClick = { onLongPressSession(s) }
-                        )
+                        SessionSummaryRow(s, onClick = { onPickSession(s) }, onLongClick = { onLongPressSession(s) })
                     }
                 }
             }
@@ -292,7 +238,6 @@ private fun MonthGrid(
     val offset = (firstDow + 5) % 7
     val days = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
     val weekNames = listOf("一", "二", "三", "四", "五", "六", "日")
-
     Column {
         Row(Modifier.fillMaxWidth()) {
             weekNames.forEach { w ->
@@ -317,8 +262,7 @@ private fun MonthGrid(
                         val textColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
                         Box(
                             Modifier.weight(1f).aspectRatio(1f).padding(3.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(bg)
+                                .clip(RoundedCornerShape(6.dp)).background(bg)
                                 .clickable { onPickDay(dayNum) },
                             contentAlignment = Alignment.Center
                         ) {
@@ -381,14 +325,8 @@ private fun orangeByCount(count: Int): Color = when {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionSummaryRow(
-    s: SessionWithExercises,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
-    ) {
+private fun SessionSummaryRow(s: SessionWithExercises, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(s.session.bodyPart, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(48.dp))
             Text(s.session.goal.ifBlank { "—" }, modifier = Modifier.width(56.dp))
@@ -397,8 +335,6 @@ private fun SessionSummaryRow(
         }
     }
 }
-
-// ===================== 列表视图 =====================
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -413,12 +349,10 @@ private fun ListView(
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(sorted) { s ->
-            Card(
-                modifier = Modifier.fillMaxWidth().combinedClickable(
-                    onClick = { onPickSession(s) },
-                    onLongClick = { onLongPressSession(s) }
-                )
-            ) {
+            Card(modifier = Modifier.fillMaxWidth().combinedClickable(
+                onClick = { onPickSession(s) },
+                onLongClick = { onLongPressSession(s) }
+            )) {
                 Column(Modifier.padding(10.dp)) {
                     Text(s.session.date, style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(2.dp))
@@ -430,20 +364,38 @@ private fun ListView(
     }
 }
 
-// ===================== 详情页（重排） =====================
+// ===================== 详情页（独立全屏，由 MainScreen 调用） =====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionDetailScreen(
+fun SessionDetailScreen(
     s: SessionWithExercises,
     onBack: () -> Unit,
-    onLongPress: (SessionWithExercises) -> Unit
+    onSavedAsTemplate: (String) -> Unit = {}
 ) {
     BackHandler { onBack() }
+    var showMenu by remember { mutableStateOf(false) }
+    var showTemplateNameDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var templateName by remember { mutableStateOf("") }
+    val vm: TrainingViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = TrainingViewModelFactory(AppDatabase.get(androidx.compose.ui.platform.LocalContext.current).dao())
+    )
+
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("${s.session.date}｜${s.session.bodyPart}") },
-            actions = { TextButton(onClick = { onLongPress(s) }) { Text("⋯") } }
+            actions = {
+                TextButton(onClick = { showMenu = true }) { Text("⋯") }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(text = { Text("保存为模板") }, onClick = {
+                        showMenu = false; showTemplateNameDialog = true
+                    })
+                    DropdownMenuItem(text = { Text("删除", color = MaterialTheme.colorScheme.error) }, onClick = {
+                        showMenu = false; showDeleteConfirm = true
+                    })
+                }
+            }
         )
     }) { p ->
         LazyColumn(
@@ -452,16 +404,11 @@ private fun SessionDetailScreen(
             item {
                 Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     InfoRow("目标", s.session.goal.ifBlank { "—" })
-                    if (s.session.durationSeconds > 0)
-                        InfoRow("时长", formatDuration(s.session.durationSeconds))
-                    if (s.session.notes.isNotBlank())
-                        InfoRow("备注", s.session.notes)
+                    if (s.session.durationSeconds > 0) InfoRow("时长", formatDuration(s.session.durationSeconds))
+                    if (s.session.notes.isNotBlank()) InfoRow("备注", s.session.notes)
                     s.painRecords.forEach { pr ->
-                        InfoRow(
-                            "疼痛",
-                            "${pr.location} ${pr.score}/10${if (pr.note.isNotBlank()) "（${pr.note}）" else ""}",
-                            valueColor = MaterialTheme.colorScheme.error
-                        )
+                        InfoRow("疼痛", "${pr.location} ${pr.score}/10${if (pr.note.isNotBlank()) "（${pr.note}）" else ""}",
+                            valueColor = MaterialTheme.colorScheme.error)
                     }
                 }
                 HorizontalDivider()
@@ -471,24 +418,19 @@ private fun SessionDetailScreen(
                     val name = if (ex.exercise.weight < 0) "助力${ex.exercise.exerciseName}" else ex.exercise.exerciseName
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        Text(
-                            "${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps} × ${ex.exercise.totalSets}",
+                        Text("${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps} × ${ex.exercise.totalSets}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (ex.exercise.restSeconds > 0)
-                        Text("组间休息 ${ex.exercise.restSeconds}s",
-                            style = MaterialTheme.typography.labelSmall,
+                        Text("组间休息 ${ex.exercise.restSeconds}s", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (ex.exercise.notes.isNotBlank())
-                        Text("备注：${ex.exercise.notes}",
-                            style = MaterialTheme.typography.bodySmall,
+                        Text("备注：${ex.exercise.notes}", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     ex.equipmentProfile?.let { pr ->
                         Text("器械：${pr.equipmentName.ifBlank { pr.exerciseName }}（${ex.gymName}）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Spacer(Modifier.height(6.dp))
                     ex.sets.forEach { set ->
@@ -497,12 +439,9 @@ private fun SessionDetailScreen(
                         val d = if (set.durationSeconds > 0) " · ${set.durationSeconds}s" else ""
                         val r = if (set.restTakenSeconds > 0) " · 休${set.restTakenSeconds}s" else ""
                         Row(Modifier.padding(vertical = 2.dp)) {
-                            Text("第${set.setIndex}组",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(56.dp))
-                            Text("$mark ${set.actualReps}次$f$d$r",
-                                style = MaterialTheme.typography.bodySmall)
+                            Text("第${set.setIndex}组", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(56.dp))
+                            Text("$mark ${set.actualReps}次$f$d$r", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -510,6 +449,39 @@ private fun SessionDetailScreen(
             }
             item { Spacer(Modifier.height(60.dp)) }
         }
+    }
+
+    if (showTemplateNameDialog) {
+        AlertDialog(
+            onDismissRequest = { showTemplateNameDialog = false },
+            title = { Text("保存为模板") },
+            text = { OutlinedTextField(value = templateName, onValueChange = { templateName = it }, label = { Text("模板名称") }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (templateName.isNotBlank()) {
+                        vm.saveSessionAsTemplate(s, templateName)
+                        showTemplateNameDialog = false
+                        onSavedAsTemplate("已保存为模板")
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showTemplateNameDialog = false }) { Text("取消") } }
+        )
+    }
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("删除训练记录") },
+            text = { Text("确认删除此训练记录？删除后不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteSession(s.session.id)
+                    showDeleteConfirm = false
+                    onBack()
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } }
+        )
     }
 }
 
@@ -522,8 +494,6 @@ private fun InfoRow(label: String, value: String, valueColor: Color = MaterialTh
     }
 }
 
-// ===================== 导出对话框 =====================
-
 @Composable
 fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
@@ -533,7 +503,6 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     var selectedParts by remember { mutableStateOf(setOf<String>()) }
     var format by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-
     val snackbar = remember { SnackbarHostState() }
 
     val createJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -557,11 +526,9 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
             busy = true
             try {
                 val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                val md = MarkdownExporter.build(
-                    sessions,
+                val md = MarkdownExporter.build(sessions,
                     rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
-                    partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
-                )
+                    partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、"))
                 ctx.contentResolver.openOutputStream(uri)?.use { it.write(md.toByteArray()) }
                 onDismiss()
             } finally { busy = false }
