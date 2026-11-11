@@ -225,8 +225,6 @@ interface TrainingDao {
     @Update suspend fun updateSession(s: Session)
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteSession(id: Long)
-    @Query("DELETE FROM sessions")
-    suspend fun clearSessions()
 
     @Query("SELECT * FROM exercises ORDER BY id ASC")
     fun observeAllExercises(): Flow<List<ExerciseEntry>>
@@ -261,6 +259,8 @@ interface TrainingDao {
     @Insert suspend fun insertGym(g: Gym): Long
     @Query("DELETE FROM gyms WHERE id = :id")
     suspend fun deleteGym(id: Long)
+    @Query("UPDATE gyms SET name = :name WHERE id = :id")
+    suspend fun renameGym(id: Long, name: String)
     @Query("SELECT COUNT(*) FROM equipment_profiles WHERE gymId = :gymId")
     suspend fun countProfilesInGym(gymId: Long): Int
 
@@ -340,15 +340,9 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
                 gymId INTEGER NOT NULL,
                 exerciseName TEXT NOT NULL,
                 equipmentName TEXT NOT NULL,
-                seat TEXT NOT NULL,
-                backrest TEXT NOT NULL,
-                grip TEXT NOT NULL,
-                weightStack TEXT NOT NULL,
-                pin TEXT NOT NULL,
-                assist TEXT NOT NULL,
-                pulley TEXT NOT NULL,
-                other TEXT NOT NULL,
-                notes TEXT NOT NULL,
+                seat TEXT NOT NULL, backrest TEXT NOT NULL, grip TEXT NOT NULL,
+                weightStack TEXT NOT NULL, pin TEXT NOT NULL, assist TEXT NOT NULL,
+                pulley TEXT NOT NULL, other TEXT NOT NULL, notes TEXT NOT NULL,
                 createdAt INTEGER NOT NULL,
                 FOREIGN KEY(gymId) REFERENCES gyms(id) ON DELETE CASCADE
             )
@@ -358,9 +352,7 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
             CREATE TABLE IF NOT EXISTS equipment_profile_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                 profileId INTEGER NOT NULL,
-                filePath TEXT NOT NULL,
-                tag TEXT NOT NULL,
-                createdAt INTEGER NOT NULL,
+                filePath TEXT NOT NULL, tag TEXT NOT NULL, createdAt INTEGER NOT NULL,
                 FOREIGN KEY(profileId) REFERENCES equipment_profiles(id) ON DELETE CASCADE
             )
         """.trimIndent())
@@ -382,11 +374,8 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS pain_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                sessionId INTEGER NOT NULL,
-                location TEXT NOT NULL,
-                score INTEGER NOT NULL,
-                note TEXT NOT NULL,
-                createdAt INTEGER NOT NULL,
+                sessionId INTEGER NOT NULL, location TEXT NOT NULL, score INTEGER NOT NULL,
+                note TEXT NOT NULL, createdAt INTEGER NOT NULL,
                 FOREIGN KEY(sessionId) REFERENCES sessions(id) ON DELETE CASCADE
             )
         """.trimIndent())
@@ -425,13 +414,6 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
             )
         """.trimIndent())
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_exercise_library_bodyPart_name ON exercise_library(bodyPart, name)")
-        db.execSQL("""
-            CREATE TABLE IF NOT EXISTS exercise_library (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                bodyPart TEXT NOT NULL, name TEXT NOT NULL, createdAt INTEGER NOT NULL
-            )
-        """.trimIndent())
-        // 迁移时写入默认动作
         DEFAULT_EXERCISES.forEach { (part, names) ->
             names.forEach { name ->
                 db.execSQL("INSERT OR IGNORE INTO exercise_library(bodyPart, name, createdAt) VALUES(?,?,?)",
