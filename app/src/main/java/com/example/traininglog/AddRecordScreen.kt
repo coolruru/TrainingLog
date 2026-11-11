@@ -18,15 +18,14 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddRecordScreen(
-    bodyPart: String,
-    goal: String,
-    exercises: List<ExercisePlan>,
-    sessionNotes: String,
+    plan: WorkoutPlan,
     onCancel: () -> Unit,
     onConfirm: (String, Int) -> Unit
 ) {
     val ctx = LocalContext.current
-    var date by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
+    var date by remember { mutableStateOf(plan.date.ifBlank {
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    }) }
     var durationInput by remember { mutableStateOf("") }
 
     Scaffold(
@@ -49,7 +48,7 @@ fun AddRecordScreen(
             Modifier.padding(padding).fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("$bodyPart · $goal", style = MaterialTheme.typography.titleMedium)
+            Text("${plan.bodyPart} · ${plan.goal}", style = MaterialTheme.typography.titleMedium)
 
             Text("日期", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -94,7 +93,7 @@ fun AddRecordScreen(
             HorizontalDivider()
             Text("将保存以下动作：", style = MaterialTheme.typography.titleSmall)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(exercises) { ep ->
+                items(plan.exercises) { ep ->
                     Card {
                         Column(Modifier.padding(10.dp)) {
                             Text(ep.exerciseName, style = MaterialTheme.typography.bodyMedium)
