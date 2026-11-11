@@ -29,7 +29,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,14 +36,19 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(100); now = System.currentTimeMillis() } }
 
+    val events by vm.events.collectAsState(initial = "")
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(events) { if (events.isNotEmpty()) snackbar.showSnackbar(events) }
+
     var showPainDialog by remember { mutableStateOf(false) }
     var pendingFail by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var showAddExercise by remember { mutableStateOf(false) }
 
     val totalElapsed = ((now - active.startMs) / 1000).toInt()
-    val restingAfter = findRestingAfter(active)
+    val restingInfo = findRestingInfo(active)
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -78,7 +82,8 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
             itemsIndexed(active.exercises) { exIdx, ex ->
                 ExerciseRow(
                     exIdx = exIdx, ex = ex, now = now,
-                    cupAfterBlock = restingAfter?.takeIf { it.exIdx == exIdx }?.blockIdx,
+                    cupAfterBlock = restingInfo?.takeIf { it.exIdx == exIdx }?.blockIdx,
+                    cupEndMs = restingInfo?.takeIf { it.exIdx == exIdx }?.endMs ?: 0L,
                     onClickBlock = { i -> vm.clickBlock(exIdx, i) },
                     onLongPressBlock = { i -> pendingFail = exIdx to i },
                     onSkip = { vm.skipExercise(exIdx) }
@@ -106,10 +111,9 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     }
 }
 
-private data class RestingInfo(val exIdx: Int, val blockIdx: Int)
+private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
 
-private fun findRestingAfter(active: ActiveWorkout): RestingInfo? {
-    // 全局第一个 IDLE 方块
+private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
     var firstIdle: Pair<Int, Int>? = null
     outer@ for (exIdx in active.exercises.indices) {
         val ex = active.exercises[exIdx]
@@ -121,7 +125,6 @@ private fun findRestingAfter(active: ActiveWorkout): RestingInfo? {
         }
     }
     val idle = firstIdle ?: return null
-    // 找它前一个 DONE/FAILED
     var last: RestingInfo? = null
     outer@ for (exIdx in active.exercises.indices) {
         val ex = active.exercises[exIdx]
@@ -130,7 +133,7 @@ private fun findRestingAfter(active: ActiveWorkout): RestingInfo? {
             if (exIdx == idle.first && setIdx == idle.second) break@outer
             val b = ex.blocks[setIdx]
             if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) {
-                last = RestingInfo(exIdx, setIdx)
+                last = RestingInfo(exIdx, setIdx, b.endMs)
             }
         }
     }
@@ -143,6 +146,7 @@ private fun ExerciseRow(
     ex: ActiveExercise,
     now: Long,
     cupAfterBlock: Int?,
+    cupEndMs: Long,
     onClickBlock: (Int) -> Unit,
     onLongPressBlock: (Int) -> Unit,
     onSkip: () -> Unit
@@ -172,7 +176,7 @@ private fun ExerciseRow(
                             onClick = { onClickBlock(i) }, onLongPress = { onLongPressBlock(i) }
                         )
                         if (cupAfterBlock == i) {
-                            val restElapsed = now - b.endMs
+                            val restElapsed = now - cupEndMs
                             val restMs = ex.restSeconds * 1000L
                             val progress = if (restMs > 0) (1f - restElapsed.toFloat() / restMs).coerceIn(0f, 1f) else 1f
                             val shaking = restMs > 0 && restElapsed >= restMs
@@ -224,9 +228,7 @@ private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLong
         ) {
             Text(label, color = textColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        if (restLabel.isNotEmpty()) {
-            Text(restLabel, style = MaterialTheme.typography.labelSmall)
-        }
+        if (restLabel.isNotEmpty()) Text(restLabel, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -247,9 +249,7 @@ private fun WaterCup(progress: Float, shaking: Boolean, restElapsedSec: Int) {
                 .border(1.dp, Color.Gray, RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp, topStart = 2.dp, topEnd = 2.dp)),
             contentAlignment = Alignment.BottomCenter
         ) {
-            Box(
-                Modifier.fillMaxWidth().fillMaxHeight(progress).background(Color(0xFF4FC3F7))
-            )
+            Box(Modifier.fillMaxWidth().fillMaxHeight(progress).background(Color(0xFF4FC3F7)))
         }
         Text(if (shaking) "休息完" else "${restElapsedSec}s", style = MaterialTheme.typography.labelSmall)
     }
@@ -303,7 +303,7 @@ private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: 
 
 @Composable
 private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm: (ExercisePlan) -> Unit) {
-    val library = EXERCISES[bodyPart].orEmpty()
+    val library = DEFAULT_EXERCISES[bodyPart].orEmpty()
     var name by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
     var sets by remember { mutableStateOf("5") }
