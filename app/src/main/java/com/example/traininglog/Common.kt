@@ -9,7 +9,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
-val EXERCISES = mapOf(
+// 默认动作库：只在首次启动或恢复默认时写入数据库
+val DEFAULT_EXERCISES: Map<String, List<String>> = mapOf(
     "胸" to listOf("杠铃卧推","哑铃卧推","上斜卧推","下斜推胸","固定上斜卧推","双杠臂屈伸","坐姿飞鸟","绳索夹胸"),
     "背" to listOf("引体向上","助力引体","杠铃划船","高位下拉","超级高位下拉","坐姿划船","悍马划船","直臂下压","硬拉"),
     "肩" to listOf("哑铃推举","固定肩推","悍马肩推","侧平举","绳索侧平举","面拉","后束飞鸟"),
@@ -39,7 +40,8 @@ data class WorkoutPlan(
     val bodyPart: String,
     val goal: String,
     val sessionNotes: String,
-    val exercises: List<ExercisePlan>
+    val exercises: List<ExercisePlan>,
+    val durationOverrideSeconds: Int = 0
 )
 
 fun fileForPath(ctx: Context, relPath: String): File =
@@ -56,28 +58,63 @@ fun fmtW(w: Double): String =
     else String.format(Locale.getDefault(), "%.1f", w)
 
 fun formatDuration(seconds: Int): String {
-    val m = seconds / 60
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
     val s = seconds % 60
-    return String.format(Locale.getDefault(), "%02d:%02d", m, s)
+    return if (h > 0) String.format(Locale.getDefault(), "%d:%02d:%02d", h, m, s)
+    else String.format(Locale.getDefault(), "%02d:%02d", m, s)
+}
+
+/**
+ * 解析总时长输入：
+ * - 空返回 null（表示不填）
+ * - "68" 视为 68 分钟 → 4080 秒
+ * - "1:05" 视为 1 小时 5 分 → 3900 秒
+ * - "1:05:30" 视为 1 小时 5 分 30 秒
+ */
+fun parseDurationToSeconds(input: String): Int? {
+    val s = input.trim()
+    if (s.isEmpty()) return null
+    return try {
+        when {
+            s.contains(":") -> {
+                val parts = s.split(":")
+                when (parts.size) {
+                    2 -> {
+                        val h = parts[0].toIntOrNull() ?: return null
+                        val m = parts[1].toIntOrNull() ?: return null
+                        h * 3600 + m * 60
+                    }
+                    3 -> {
+                        val h = parts[0].toIntOrNull() ?: return null
+                        val m = parts[1].toIntOrNull() ?: return null
+                        val sec = parts[2].toIntOrNull() ?: return null
+                        h * 3600 + m * 60 + sec
+                    }
+                    else -> null
+                }
+            }
+            else -> {
+                val m = s.toIntOrNull() ?: return null
+                m * 60
+            }
+        }
+    } catch (e: Exception) { null }
 }
 
 suspend fun saveImageToPrivate(ctx: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
     try {
         val dir = File(ctx.filesDir, "equipment_photos").apply { mkdirs() }
         val dest = File(dir, "img_${System.currentTimeMillis()}_${(1000..9999).random()}.jpg")
-        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: return@withContext null
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
         val maxDim = maxOf(opts.outWidth, opts.outHeight)
         var sample = 1
         while (maxDim / sample > 1600) sample *= 2
         val dec = BitmapFactory.Options().apply { inSampleSize = sample }
-        val bmp: Bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dec)
-            ?: return@withContext null
+        val bmp: Bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dec) ?: return@withContext null
         dest.outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 85, out) }
         dest.relativeTo(ctx.filesDir).path
-    } catch (e: Exception) {
-        null
-    }
+    } catch (e: Exception) { null }
 }
