@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.activity.compose.BackHandler
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,6 +55,9 @@ fun MainScreen(
     val titles = listOf("训练", "历史", "器械", "模板", "设置")
     var historyMenuOpen by remember { mutableStateOf(false) }
 
+    if (tab != 0) {
+    androidx.activity.compose.BackHandler { tab = 0 }
+}
     Scaffold(
         topBar = {
             TopAppBar(
