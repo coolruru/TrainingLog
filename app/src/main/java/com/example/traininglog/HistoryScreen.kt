@@ -160,13 +160,13 @@ fun HistoryScreen(vm: TrainingViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (templateName.isNotBlank()) {
-                        vm.saveSessionAsTemplate(s, templateName)
-                        snackbar.showSnackbar("已保存为模板")
-                        templateName = ""
-                        showTemplateNameDialog = null
-                    }
-                }) { Text("保存") }
+    if (templateName.isNotBlank()) {
+        vm.saveSessionAsTemplate(s, templateName)
+        scope.launch { snackbar.showSnackbar("已保存为模板") }
+        templateName = ""
+        showTemplateNameDialog = null
+    }
+}) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { showTemplateNameDialog = null }) { Text("取消") } }
         )
