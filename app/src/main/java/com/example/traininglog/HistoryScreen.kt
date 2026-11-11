@@ -1,6 +1,8 @@
 package com.example.traininglog
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +13,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,39 +35,160 @@ import java.util.Locale
 
 @Composable
 fun HistoryScreen(vm: TrainingViewModel) {
-    val allSessions by vm.sessions.collectAsState()
-    var viewMode by remember { mutableStateOf(0) } // 0=日历,1=列表
-    var exportOpen by remember { mutableStateOf(false) }
+    val all by vm.sessions.collectAsState()
+    var viewMode by remember { mutableStateOf(0) }
+    var showExportMenu by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var showImportPicker by remember { mutableStateOf(false) }
     var detail by remember { mutableStateOf<SessionWithExercises?>(null) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+
+    var pendingSessionMenu by remember { mutableStateOf<SessionWithExercises?>(null) }
+    var showTemplateNameDialog by remember { mutableStateOf<SessionWithExercises?>(null) }
+    var pendingDelete by remember { mutableStateOf<SessionWithExercises?>(null) }
+    var templateName by remember { mutableStateOf("") }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val res = vm.importFrom(ctx, uri)
+                snackbar.showSnackbar(
+                    if (res.success)
+                        "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
+                    else "导入失败：${res.message}"
+                )
+            }
+        }
+    }
 
     if (detail != null) {
-        SessionDetailScreen(detail!!, onBack = { detail = null })
+        SessionDetailScreen(detail!!, onBack = { detail = null }, onLongPress = { pendingSessionMenu = it })
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = viewMode) {
-            Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
-            Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            TabRow(selectedTabIndex = viewMode) {
+                Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
+                Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
+            }
+            if (viewMode == 0) {
+                CalendarView(all,
+                    onPickSession = { detail = it },
+                    onLongPressSession = { pendingSessionMenu = it }
+                )
+            } else {
+                ListView(all,
+                    onPickSession = { detail = it },
+                    onLongPressSession = { pendingSessionMenu = it }
+                )
+            }
         }
-        if (viewMode == 0) CalendarView(allSessions, onPickSession = { detail = it })
-        else ListView(allSessions, onPickSession = { detail = it })
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
-    if (exportOpen) ExportDialog(vm) { exportOpen = false }
+
+    // 导出 / 导入菜单
+    if (showExportMenu) {
+        AlertDialog(
+            onDismissRequest = { showExportMenu = false },
+            title = { Text("数据") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { showExportMenu = false; showExportDialog = true },
+                        modifier = Modifier.fillMaxWidth()) { Text("导出") }
+                    TextButton(onClick = { showExportMenu = false; importLauncher.launch(arrayOf("application/json", "application/zip", "*/*")) },
+                        modifier = Modifier.fillMaxWidth()) { Text("导入 JSON / ZIP") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showExportMenu = false }) { Text("关闭") } }
+        )
+    }
+
+    if (showExportDialog) {
+        ExportDialog(vm) { showExportDialog = false }
+    }
+
+    // 长按菜单
+    pendingSessionMenu?.let { s ->
+        AlertDialog(
+            onDismissRequest = { pendingSessionMenu = null },
+            title = { Text("${s.session.date}｜${s.session.bodyPart}") },
+            text = { Text("选择操作") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showTemplateNameDialog = s
+                    pendingSessionMenu = null
+                }) { Text("保存为模板") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        pendingDelete = s
+                        pendingSessionMenu = null
+                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { pendingSessionMenu = null }) { Text("取消") }
+                }
+            }
+        )
+    }
+
+    pendingDelete?.let { s ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除训练记录") },
+            text = { Text("确认删除 ${s.session.date}｜${s.session.bodyPart} 的训练记录？删除后不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteSession(s.session.id)
+                    pendingDelete = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+        )
+    }
+
+    showTemplateNameDialog?.let { s ->
+        AlertDialog(
+            onDismissRequest = { showTemplateNameDialog = null },
+            title = { Text("保存为模板") },
+            text = {
+                OutlinedTextField(
+                    value = templateName, onValueChange = { templateName = it },
+                    label = { Text("模板名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (templateName.isNotBlank()) {
+                        vm.saveSessionAsTemplate(s, templateName)
+                        snackbar.showSnackbar("已保存为模板")
+                        templateName = ""
+                        showTemplateNameDialog = null
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showTemplateNameDialog = null }) { Text("取消") } }
+        )
+    }
 }
 
 // ===================== 日历视图 =====================
 
 @Composable
-private fun CalendarView(all: List<SessionWithExercises>, onPickSession: (SessionWithExercises) -> Unit) {
+private fun CalendarView(
+    all: List<SessionWithExercises>,
+    onPickSession: (SessionWithExercises) -> Unit,
+    onLongPressSession: (SessionWithExercises) -> Unit
+) {
     val today = remember { Calendar.getInstance() }
     var year by remember { mutableStateOf(today.get(Calendar.YEAR)) }
     var month by remember { mutableStateOf(today.get(Calendar.MONTH) + 1) }
-    var level by remember { mutableStateOf(0) } // 0=月,1=年,2=年份
+    var level by remember { mutableStateOf(0) }
     var decadeStart by remember { mutableStateOf(year - 4) }
     var selectedDay by remember { mutableStateOf<Int?>(if (year == today.get(Calendar.YEAR) && month == today.get(Calendar.MONTH) + 1) today.get(Calendar.DAY_OF_MONTH) else null) }
 
-    // 按月训练次数
     val monthCountMap = remember(all) {
         all.groupBy {
             val p = it.session.date.split("-"); (p[0].toIntOrNull() ?: 0) to (p[1].toIntOrNull() ?: 0)
@@ -81,37 +206,35 @@ private fun CalendarView(all: List<SessionWithExercises>, onPickSession: (Sessio
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Box(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = {
+                when (level) {
+                    0 -> { month--; if (month < 1) { month = 12; year-- }; selectedDay = null }
+                    1 -> year--
+                    2 -> decadeStart -= 9
+                }
+            }) { Text("‹") }
+            Text(
+                when (level) {
+                    0 -> "${year}年${month}月"
+                    1 -> "${year}年"
+                    else -> ""
+                },
+                modifier = Modifier.clickable {
                     when (level) {
-                        0 -> { month--; if (month < 1) { month = 12; year-- }; selectedDay = null }
-                        1 -> year--
-                        2 -> decadeStart -= 9
+                        0 -> level = 1
+                        1 -> { decadeStart = year - 4; level = 2 }
                     }
-                }) { Text("‹") }
-                Text(
-                    when (level) {
-                        0 -> "${year}年${month}月"
-                        1 -> "${year}年"
-                        else -> ""
-                    },
-                    modifier = Modifier.clickable {
-                        when (level) {
-                            0 -> { level = 1 }
-                            1 -> { decadeStart = year - 4; level = 2 }
-                        }
-                    },
-                    style = MaterialTheme.typography.titleMedium
-                )
-                TextButton(onClick = {
-                    when (level) {
-                        0 -> { month++; if (month > 12) { month = 1; year++ }; selectedDay = null }
-                        1 -> year++
-                        2 -> decadeStart += 9
-                    }
-                }) { Text("›") }
-            }
+                },
+                style = MaterialTheme.typography.titleMedium
+            )
+            TextButton(onClick = {
+                when (level) {
+                    0 -> { month++; if (month > 12) { month = 1; year++ }; selectedDay = null }
+                    1 -> year++
+                    2 -> decadeStart += 9
+                }
+            }) { Text("›") }
         }
 
         when (level) {
@@ -140,7 +263,10 @@ private fun CalendarView(all: List<SessionWithExercises>, onPickSession: (Sessio
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
                     items(list) { s ->
-                        SessionSummaryRow(s) { onPickSession(s) }
+                        SessionSummaryRow(s,
+                            onClick = { onPickSession(s) },
+                            onLongClick = { onLongPressSession(s) }
+                        )
                     }
                 }
             }
@@ -156,12 +282,10 @@ private fun MonthGrid(
     onPickDay: (Int) -> Unit
 ) {
     val cal = Calendar.getInstance().apply {
-        set(Calendar.YEAR, year)
-        set(Calendar.MONTH, month - 1)
-        set(Calendar.DAY_OF_MONTH, 1)
+        set(Calendar.YEAR, year); set(Calendar.MONTH, month - 1); set(Calendar.DAY_OF_MONTH, 1)
     }
-    val firstDow = cal.get(Calendar.DAY_OF_WEEK) // Sunday=1
-    val offset = (firstDow + 5) % 7 // Monday-start
+    val firstDow = cal.get(Calendar.DAY_OF_WEEK)
+    val offset = (firstDow + 5) % 7
     val days = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
     val weekNames = listOf("一", "二", "三", "四", "五", "六", "日")
 
@@ -184,7 +308,7 @@ private fun MonthGrid(
                         val bg = when {
                             isSelected -> MaterialTheme.colorScheme.primary
                             isTraining -> Color(0xFFFFB74D)
-                            else -> MaterialTheme.colorScheme.surfaceVariant
+                            else -> Color.Transparent
                         }
                         val textColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
                         Box(
@@ -199,9 +323,7 @@ private fun MonthGrid(
                                 if (!isTraining) Text("休", color = textColor, fontSize = 9.sp)
                             }
                         }
-                    } else {
-                        Spacer(Modifier.weight(1f).aspectRatio(1f).padding(3.dp))
-                    }
+                    } else Spacer(Modifier.weight(1f).aspectRatio(1f).padding(3.dp))
                 }
             }
         }
@@ -210,10 +332,9 @@ private fun MonthGrid(
 
 @Composable
 private fun YearGrid(year: Int, monthCountMap: Map<Pair<Int, Int>, Int>, onPickMonth: (Int) -> Unit) {
-    val months = (1..12).toList()
     LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(months) { m ->
+        items((1..12).toList()) { m ->
             val count = monthCountMap[year to m] ?: 0
             val bg = orangeByCount(count)
             Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).background(bg)
@@ -247,16 +368,23 @@ private fun DecadeGrid(decadeStart: Int, yearCountMap: Map<Int, Int>, onPickYear
 }
 
 private fun orangeByCount(count: Int): Color = when {
-    count == 0 -> Color(0xFFEEEEEE)
+    count == 0 -> Color.Transparent
     count <= 5 -> Color(0xFFFFE0B2)
     count <= 10 -> Color(0xFFFFB74D)
     count <= 15 -> Color(0xFFFB8C00)
     else -> Color(0xFFE65100)
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionSummaryRow(s: SessionWithExercises, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+private fun SessionSummaryRow(
+    s: SessionWithExercises,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(s.session.bodyPart, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(48.dp))
             Text(s.session.goal.ifBlank { "—" }, modifier = Modifier.width(56.dp))
@@ -268,19 +396,29 @@ private fun SessionSummaryRow(s: SessionWithExercises, onClick: () -> Unit) {
 
 // ===================== 列表视图 =====================
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ListView(all: List<SessionWithExercises>, onPickSession: (SessionWithExercises) -> Unit) {
-    val sorted = remember(all) { all.sortedWith(compareByDescending<SessionWithExercises> { it.session.date }.thenByDescending { it.session.createdAt }) }
+private fun ListView(
+    all: List<SessionWithExercises>,
+    onPickSession: (SessionWithExercises) -> Unit,
+    onLongPressSession: (SessionWithExercises) -> Unit
+) {
+    val sorted = remember(all) {
+        all.sortedWith(compareByDescending<SessionWithExercises> { it.session.date }.thenByDescending { it.session.createdAt })
+    }
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(sorted) { s ->
-            Card(onClick = { onPickSession(s) }, modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth().combinedClickable(
+                    onClick = { onPickSession(s) },
+                    onLongClick = { onLongPressSession(s) }
+                )
+            ) {
                 Column(Modifier.padding(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(s.session.date, style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.width(8.dp))
-                        Text("${s.session.bodyPart}｜${s.session.goal.ifBlank { "—" }}｜${s.exercises.size}动作｜${if (s.session.durationSeconds > 0) formatDuration(s.session.durationSeconds) else "—"}",
-                            style = MaterialTheme.typography.bodySmall)
-                    }
+                    Text(s.session.date, style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(2.dp))
+                    Text("${s.session.bodyPart}｜${s.session.goal.ifBlank { "—" }}｜${s.exercises.size}动作｜${if (s.session.durationSeconds > 0) formatDuration(s.session.durationSeconds) else "—"}",
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -289,12 +427,21 @@ private fun ListView(all: List<SessionWithExercises>, onPickSession: (SessionWit
 
 // ===================== 详情页 =====================
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun SessionDetailScreen(s: SessionWithExercises, onBack: () -> Unit) {
+private fun SessionDetailScreen(
+    s: SessionWithExercises,
+    onBack: () -> Unit,
+    onLongPress: (SessionWithExercises) -> Unit
+) {
     Scaffold(topBar = {
-        TopAppBar(title = { Text("${s.session.date}｜${s.session.bodyPart}") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } })
+        TopAppBar(
+            title = { Text("${s.session.date}｜${s.session.bodyPart}") },
+            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } },
+            actions = {
+                TextButton(onClick = { onLongPress(s) }) { Text("⋯") }
+            }
+        )
     }) { p ->
         LazyColumn(Modifier.padding(p).fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
@@ -349,49 +496,89 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     var from by remember { mutableStateOf("") }
     var to by remember { mutableStateOf("") }
     var selectedParts by remember { mutableStateOf(setOf<String>()) }
+    var format by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
+    var pendingFormat by remember { mutableStateOf(0) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("导出 Markdown") },
-        text = {
-            Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(from, { from = it }, label = { Text("开始日期 可空") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(to, { to = it }, label = { Text("结束日期 可空") }, modifier = Modifier.fillMaxWidth())
-                Text("部位（不选 = 全部）")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    BODY_PARTS.forEach { p ->
-                        FilterChip(selected = p in selectedParts,
-                            onClick = { selectedParts = if (p in selectedParts) selectedParts - p else selectedParts + p },
-                            label = { Text(p) })
+    val snackbar = remember { SnackbarHostState() }
+
+    val createJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            scope.launch {
+                busy = true
+                val ok = vm.exportToJson(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+                busy = false
+                if (ok) onDismiss()
+                else snackbar.showSnackbar("导出失败")
+            }
+        }
+    }
+    val createZipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) {
+            scope.launch {
+                busy = true
+                val ok = vm.exportToZip(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+                busy = false
+                if (ok) onDismiss()
+                else snackbar.showSnackbar("导出失败")
+            }
+        }
+    }
+    val createMdLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        if (uri != null) {
+            scope.launch {
+                busy = true
+                try {
+                    val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+                    val md = MarkdownExporter.build(
+                        sessions,
+                        rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
+                        partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
+                    )
+                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(md.toByteArray()) }
+                    onDismiss()
+                } finally { busy = false }
+            }
+        }
+    }
+
+    Box {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("导出") },
+            text = {
+                Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("格式")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = format == 0, onClick = { format = 0 }, label = { Text("Markdown") })
+                        FilterChip(selected = format == 1, onClick = { format = 1 }, label = { Text("JSON") })
+                        FilterChip(selected = format == 2, onClick = { format = 2 }, label = { Text("ZIP+照片") })
+                    }
+                    Text("日期范围（可空）", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(from, { from = it }, label = { Text("开始") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(to, { to = it }, label = { Text("结束") }, modifier = Modifier.fillMaxWidth())
+                    Text("部位（不选 = 全部）")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        BODY_PARTS.forEach { p ->
+                            FilterChip(selected = p in selectedParts,
+                                onClick = { selectedParts = if (p in selectedParts) selectedParts - p else selectedParts + p },
+                                label = { Text(p) })
+                        }
                     }
                 }
-            }
-        },
-        confirmButton = {
-            Button(enabled = !busy, onClick = {
-                scope.launch {
-                    busy = true
-                    try {
-                        val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                        val md = MarkdownExporter.build(sessions,
-                            rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
-                            partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、"))
-                        val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
-                        val file = File(dir, "训练记录_${System.currentTimeMillis()}.md")
-                        file.writeText(md)
-                        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/markdown"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        ctx.startActivity(Intent.createChooser(intent, "分享 Markdown"))
-                        onDismiss()
-                    } finally { busy = false }
-                }
-            }) { Text(if (busy) "导出中..." else "导出") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+            },
+            confirmButton = {
+                Button(enabled = !busy, onClick = {
+                    val stamp = System.currentTimeMillis()
+                    when (format) {
+                        0 -> createMdLauncher.launch("训练记录_$stamp.md")
+                        1 -> createJsonLauncher.launch("training_backup_$stamp.json")
+                        2 -> createZipLauncher.launch("training_backup_$stamp.zip")
+                    }
+                }) { Text(if (busy) "处理中..." else "导出") }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        )
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
 }
