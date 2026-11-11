@@ -27,9 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
-import java.io.File
 import java.util.Calendar
 
 @Composable
@@ -38,7 +37,6 @@ fun HistoryScreen(vm: TrainingViewModel) {
     var viewMode by remember { mutableStateOf(0) }
     var showExportMenu by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
-    var showImportPicker by remember { mutableStateOf(false) }
     var detail by remember { mutableStateOf<SessionWithExercises?>(null) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -62,33 +60,37 @@ fun HistoryScreen(vm: TrainingViewModel) {
         }
     }
 
-    if (detail != null) {
-        SessionDetailScreen(detail!!, onBack = { detail = null }, onLongPress = { pendingSessionMenu = it })
-        return
-    }
-
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = viewMode) {
-                Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
-                Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
-            }
-            if (viewMode == 0) {
-                CalendarView(all,
-                    onPickSession = { detail = it },
-                    onLongPressSession = { pendingSessionMenu = it }
-                )
-            } else {
-                ListView(all,
-                    onPickSession = { detail = it },
-                    onLongPressSession = { pendingSessionMenu = it }
-                )
+        if (detail != null) {
+            SessionDetailScreen(
+                detail!!,
+                onBack = { detail = null },
+                onLongPress = { pendingSessionMenu = it }
+            )
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                TabRow(selectedTabIndex = viewMode) {
+                    Tab(selected = viewMode == 0, onClick = { viewMode = 0 }, text = { Text("日历") })
+                    Tab(selected = viewMode == 1, onClick = { viewMode = 1 }, text = { Text("列表") })
+                }
+                if (viewMode == 0) {
+                    CalendarView(all,
+                        onPickSession = { detail = it },
+                        onLongPressSession = { pendingSessionMenu = it }
+                    )
+                } else {
+                    ListView(all,
+                        onPickSession = { detail = it },
+                        onLongPressSession = { pendingSessionMenu = it }
+                    )
+                }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 
-    // 导出 / 导入菜单
+    // ===== 弹窗都放在最外层，详情页显示时也能弹出 =====
+
     if (showExportMenu) {
         AlertDialog(
             onDismissRequest = { showExportMenu = false },
@@ -97,8 +99,10 @@ fun HistoryScreen(vm: TrainingViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { showExportMenu = false; showExportDialog = true },
                         modifier = Modifier.fillMaxWidth()) { Text("导出") }
-                    TextButton(onClick = { showExportMenu = false; importLauncher.launch(arrayOf("application/json", "application/zip", "*/*")) },
-                        modifier = Modifier.fillMaxWidth()) { Text("导入 JSON / ZIP") }
+                    TextButton(onClick = {
+                        showExportMenu = false
+                        importLauncher.launch(arrayOf("application/json", "application/zip", "*/*"))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("导入 JSON / ZIP") }
                 }
             },
             confirmButton = { TextButton(onClick = { showExportMenu = false }) { Text("关闭") } }
@@ -109,28 +113,32 @@ fun HistoryScreen(vm: TrainingViewModel) {
         ExportDialog(vm) { showExportDialog = false }
     }
 
-    // 长按菜单
+    // 长按二级菜单：只显示三个按钮
     pendingSessionMenu?.let { s ->
-        AlertDialog(
-            onDismissRequest = { pendingSessionMenu = null },
-            title = { Text("${s.session.date}｜${s.session.bodyPart}") },
-            text = { Text("选择操作") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showTemplateNameDialog = s
-                    pendingSessionMenu = null
-                }) { Text("保存为模板") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        pendingDelete = s
-                        pendingSessionMenu = null
-                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { pendingSessionMenu = null }) { Text("取消") }
+        Dialog(onDismissRequest = { pendingSessionMenu = null }) {
+            Card(Modifier.fillMaxWidth().padding(16.dp)) {
+                Column(Modifier.padding(8.dp)) {
+                    Text(
+                        "${s.session.date}｜${s.session.bodyPart}",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
+                    )
+                    HorizontalDivider()
+                    TextButton(
+                        onClick = { showTemplateNameDialog = s; pendingSessionMenu = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("保存为模板") }
+                    TextButton(
+                        onClick = { pendingDelete = s; pendingSessionMenu = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    TextButton(
+                        onClick = { pendingSessionMenu = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("取消") }
                 }
             }
-        )
+        }
     }
 
     pendingDelete?.let { s ->
@@ -142,6 +150,7 @@ fun HistoryScreen(vm: TrainingViewModel) {
                 TextButton(onClick = {
                     vm.deleteSession(s.session.id)
                     pendingDelete = null
+                    snackbar
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
@@ -160,13 +169,13 @@ fun HistoryScreen(vm: TrainingViewModel) {
             },
             confirmButton = {
                 TextButton(onClick = {
-    if (templateName.isNotBlank()) {
-        vm.saveSessionAsTemplate(s, templateName)
-        scope.launch { snackbar.showSnackbar("已保存为模板") }
-        templateName = ""
-        showTemplateNameDialog = null
-    }
-}) { Text("保存") }
+                    if (templateName.isNotBlank()) {
+                        vm.saveSessionAsTemplate(s, templateName)
+                        scope.launch { snackbar.showSnackbar("已保存为模板") }
+                        templateName = ""
+                        showTemplateNameDialog = null
+                    }
+                }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { showTemplateNameDialog = null }) { Text("取消") } }
         )
@@ -426,7 +435,7 @@ private fun ListView(
 
 // ===================== 详情页 =====================
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SessionDetailScreen(
     s: SessionWithExercises,
@@ -497,7 +506,6 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     var selectedParts by remember { mutableStateOf(setOf<String>()) }
     var format by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var pendingFormat by remember { mutableStateOf(0) }
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -507,8 +515,7 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
                 busy = true
                 val ok = vm.exportToJson(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
                 busy = false
-                if (ok) onDismiss()
-                else snackbar.showSnackbar("导出失败")
+                if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
             }
         }
     }
@@ -518,8 +525,7 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
                 busy = true
                 val ok = vm.exportToZip(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
                 busy = false
-                if (ok) onDismiss()
-                else snackbar.showSnackbar("导出失败")
+                if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
             }
         }
     }
