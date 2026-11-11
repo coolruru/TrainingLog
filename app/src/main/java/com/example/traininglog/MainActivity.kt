@@ -1,538 +1,244 @@
 package com.example.traininglog
 
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
+import java.io.File
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val dao = AppDatabase.get(this).dao()
+        val store = ThemeStore(this)
+        setContent {
+            var themeMode by remember { mutableStateOf(store.get()) }
+            AppTheme(themeMode) {
+                val vm: TrainingViewModel = viewModel(factory = TrainingViewModelFactory(dao))
+                MainScreen(vm, themeMode, onThemeModeChange = { themeMode = it; store.set(it) })
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(100)
-            now = System.currentTimeMillis()
-        }
+fun MainScreen(
+    vm: TrainingViewModel,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit
+) {
+    val activeWorkout by vm.activeWorkout.collectAsState()
+
+    if (activeWorkout != null) {
+        WorkoutSessionScreen(vm = vm, active = activeWorkout!!)
+        return
     }
 
-    val events by vm.events.collectAsState(initial = "")
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(events) {
-        if (events.isNotEmpty()) snackbar.showSnackbar(events)
+    var tab by remember { mutableStateOf(0) }
+    val titles = listOf("训练", "历史", "器械", "模板", "设置")
+    var historyMenuOpen by remember { mutableStateOf(false) }
+
+    if (tab != 0) {
+        BackHandler { tab = 0 }
     }
-
-    var showPainDialog by remember { mutableStateOf(false) }
-    var pendingFail by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var showAddExercise by remember { mutableStateOf(false) }
-    var showExitConfirm by remember { mutableStateOf(false) }
-
-    // 系统返回键：拦截并弹“结束训练”确认
-    BackHandler { showExitConfirm = true }
-
-    val totalElapsed = ((now - active.startMs) / 1000).toInt()
-    val restingInfo = findRestingInfo(active)
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text(formatDuration(totalElapsed), fontWeight = FontWeight.Bold)
-                        Text(
-                            "${active.bodyPart} · ${active.goal}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                title = { Text(titles.getOrElse(tab) { "训练" }) },
+                navigationIcon = {
+                    if (tab == 1) {
+                        IconButton(onClick = { historyMenuOpen = true }) {
+                            Text("⋮", style = MaterialTheme.typography.titleLarge)
+                        }
                     }
-                },
-                actions = {
-                    TextButton(onClick = { showPainDialog = true }) { Text("疼痛") }
-                    TextButton(onClick = { showAddExercise = true }) { Text("加动作") }
-                    TextButton(onClick = { showExitConfirm = true }) { Text("结束") }
                 }
             )
+        },
+        bottomBar = {
+            NavigationBar {
+                titles.forEachIndexed { i, t ->
+                    NavigationBarItem(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Text(t) },
+                        label = { Text(t) }
+                    )
+                }
+            }
         }
     ) { padding ->
-        LazyColumn(
-            Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (active.painRecords.isNotEmpty()) {
-                item {
-                    Column {
-                        active.painRecords.forEach { p ->
-                            Text(
-                                "疼痛：${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
+        Box(Modifier.padding(padding)) {
+            when (tab) {
+                0 -> TrainingPlanScreen(vm)
+                1 -> HistoryScreen(vm)
+                2 -> EquipmentScreen(vm)
+                3 -> TemplateScreen(vm)
+                4 -> SettingsScreen(vm, themeMode, onThemeModeChange)
             }
-            itemsIndexed(active.exercises) { exIdx, ex ->
-                ExerciseRow(
-                    exIdx = exIdx,
-                    ex = ex,
-                    now = now,
-                    cupAfterBlock = restingInfo?.takeIf { it.exIdx == exIdx }?.blockIdx,
-                    cupEndMs = restingInfo?.takeIf { it.exIdx == exIdx }?.endMs ?: 0L,
-                    onClickBlock = { i -> vm.clickBlock(exIdx, i) },
-                    onLongPressBlock = { i -> pendingFail = exIdx to i },
-                    onSkip = { vm.skipExercise(exIdx) }
-                )
-                Spacer(Modifier.height(4.dp))
-            }
-            item { Spacer(Modifier.height(60.dp)) }
         }
     }
 
-    if (showPainDialog) {
-        PainDialog(
-            onDismiss = { showPainDialog = false },
-            onConfirm = { loc, sc, n ->
-                vm.addPainRecord(loc, sc, n)
-                showPainDialog = false
-            }
-        )
-    }
-
-    if (pendingFail != null) {
-        val (exIdx, setIdx) = pendingFail!!
-        FailBlockDialog(
-            plannedReps = active.exercises[exIdx].plannedReps,
-            onDismiss = { pendingFail = null },
-            onConfirm = { a, f ->
-                vm.markBlockFailed(exIdx, setIdx, a, f)
-                pendingFail = null
-            }
-        )
-    }
-
-    if (showAddExercise) {
-        AddExerciseDialog(
-            bodyPart = active.bodyPart,
-            onDismiss = { showAddExercise = false },
-            onConfirm = { ep ->
-                vm.addExerciseDuringWorkout(ep)
-                showAddExercise = false
-            }
-        )
-    }
-
-    if (showExitConfirm) {
+    if (historyMenuOpen) {
         AlertDialog(
-            onDismissRequest = { showExitConfirm = false },
-            title = { Text("结束训练") },
-            text = { Text("当前训练尚未结束，结束会保存已完成的组。确定结束？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showExitConfirm = false
-                    vm.endWorkout()
-                }) { Text("结束并保存") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExitConfirm = false }) { Text("继续训练") }
-            }
+            onDismissRequest = { historyMenuOpen = false },
+            title = { Text("数据") },
+            text = { Text("请到历史页导出/导入。") },
+            confirmButton = { TextButton(onClick = { historyMenuOpen = false }) { Text("关闭") } }
         )
     }
 }
 
-// ===================== 计算休息中的方块 =====================
-
-private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
-
-private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
-    // 全局第一个 IDLE 方块
-    var firstIdle: Pair<Int, Int>? = null
-    outer@ for (exIdx in active.exercises.indices) {
-        val ex = active.exercises[exIdx]
-        if (ex.skipped) continue
-        for (setIdx in ex.blocks.indices) {
-            if (ex.blocks[setIdx].status == BlockStatus.IDLE) {
-                firstIdle = exIdx to setIdx
-                break@outer
-            }
-        }
-    }
-    val idle = firstIdle ?: return null
-    // 找它前面最后一个 DONE/FAILED（跨动作）
-    var last: RestingInfo? = null
-    outer@ for (exIdx in active.exercises.indices) {
-        val ex = active.exercises[exIdx]
-        if (ex.skipped) continue
-        for (setIdx in ex.blocks.indices) {
-            if (exIdx == idle.first && setIdx == idle.second) break@outer
-            val b = ex.blocks[setIdx]
-            if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) {
-                last = RestingInfo(exIdx, setIdx, b.endMs)
-            }
-        }
-    }
-    return last
-}
-
-// ===================== 单个动作行 =====================
-
 @Composable
-private fun ExerciseRow(
-    exIdx: Int,
-    ex: ActiveExercise,
-    now: Long,
-    cupAfterBlock: Int?,
-    cupEndMs: Long,
-    onClickBlock: (Int) -> Unit,
-    onLongPressBlock: (Int) -> Unit,
-    onSkip: () -> Unit
+fun SettingsScreen(
+    vm: TrainingViewModel,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit
 ) {
-    Card {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val name = if (ex.weight < 0) "助力${ex.exerciseName}" else ex.exerciseName
-                Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                if (ex.skipped) {
-                    Text(
-                        "已跳过",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    Text(
-                        "${displayLoad(ex.weight)} · ${ex.totalSets}×${ex.plannedReps} · ${ex.restSeconds}s",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    TextButton(onClick = onSkip) { Text("跳过") }
-                }
-            }
-            if (ex.notes.isNotBlank())
-                Text("备注：${ex.notes}", style = MaterialTheme.typography.bodySmall)
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    var showHelp by remember { mutableStateOf(false) }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
-            if (!ex.skipped) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ex.blocks.forEachIndexed { i, b ->
-                        BlockView(
-                            block = b,
-                            now = now,
-                            onClick = { onClickBlock(i) },
-                            onLongPress = { onLongPressBlock(i) }
-                        )
-                        if (cupAfterBlock == i) {
-                            val restElapsed = now - cupEndMs
-                            val restMs = ex.restSeconds * 1000L
-                            val progress = if (restMs > 0)
-                                (1f - restElapsed.toFloat() / restMs).coerceIn(0f, 1f)
-                            else 1f
-                            val shaking = restMs > 0 && restElapsed >= restMs
-                            WaterCup(
-                                progress = progress,
-                                shaking = shaking,
-                                restElapsedSec = (restElapsed / 1000).toInt()
-                            )
-                        } else if (i < ex.blocks.size - 1) {
-                            Spacer(Modifier.width(6.dp))
-                        }
-                    }
-                }
-            }
+    BackHandler(enabled = showHelp) { showHelp = false }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importUri = uri
+    }
+    val createJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            val ok = vm.exportToJson(ctx, uri, null, null, emptyList())
+            snackbar.showSnackbar(if (ok) "导出成功" else "导出失败")
         }
     }
-}
-
-// ===================== 方块 =====================
-
-@Composable
-private fun BlockView(
-    block: ActiveBlock,
-    now: Long,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit
-) {
-    val bg = when (block.status) {
-        BlockStatus.IDLE -> Color(0xFFE0E0E0)
-        BlockStatus.RUNNING -> Color(0xFFFF9800)
-        BlockStatus.DONE -> Color(0xFF4CAF50)
-        BlockStatus.FAILED -> Color(0xFFF44336)
-    }
-    val textColor = when (block.status) {
-        BlockStatus.DONE, BlockStatus.FAILED, BlockStatus.RUNNING -> Color.White
-        else -> Color.Black
-    }
-    val label = when (block.status) {
-        BlockStatus.IDLE -> "${block.setIndex}"
-        BlockStatus.RUNNING -> "${((now - block.startMs) / 1000).toInt()}s"
-        BlockStatus.DONE -> {
-            val d = if (block.endMs > block.startMs)
-                ((block.endMs - block.startMs) / 1000).toInt() else 0
-            "${block.setIndex}·${d}s"
+    val createZipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) scope.launch {
+            val ok = vm.exportToZip(ctx, uri, null, null, emptyList())
+            snackbar.showSnackbar(if (ok) "导出成功" else "导出失败")
         }
-        BlockStatus.FAILED -> "未完成"
     }
-    val restLabel = if ((block.status == BlockStatus.DONE || block.status == BlockStatus.FAILED) && block.restTakenMs > 0)
-        "休${block.restTakenMs / 1000}s" else ""
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .size(width = 66.dp, height = 52.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(bg)
-                .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
-                .pointerInput(block) {
-                    detectTapGestures(
-                        onTap = { onClick() },
-                        onLongPress = { onLongPress() }
-                    )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(label, color = textColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        if (restLabel.isNotEmpty())
-            Text(restLabel, style = MaterialTheme.typography.labelSmall)
-    }
-}
-
-// ===================== 水杯 =====================
-
-@Composable
-private fun WaterCup(progress: Float, shaking: Boolean, restElapsedSec: Int) {
-    val infinite = rememberInfiniteTransition()
-    val dx by infinite.animateFloat(
-        initialValue = -3f, targetValue = 3f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(120, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
+    LaunchedEffect(importUri) {
+        val u = importUri ?: return@LaunchedEffect
+        val res = vm.importFrom(ctx, u)
+        snackbar.showSnackbar(
+            if (res.success) "导入完成：${res.sessions}训练 / ${res.templates}模板 / ${res.profiles}器械"
+            else "导入失败：${res.message}"
         )
-    )
-    val modifier = if (shaking) Modifier.offset(x = dx.dp) else Modifier
+        importUri = null
+    }
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-        Box(
-            Modifier
-                .size(width = 22.dp, height = 32.dp)
-                .clip(
-                    RoundedCornerShape(
-                        bottomStart = 4.dp, bottomEnd = 4.dp,
-                        topStart = 2.dp, topEnd = 2.dp
-                    )
-                )
-                .background(Color(0x11000000))
-                .border(
-                    1.dp, Color.Gray,
-                    RoundedCornerShape(
-                        bottomStart = 4.dp, bottomEnd = 4.dp,
-                        topStart = 2.dp, topEnd = 2.dp
-                    )
-                ),
-            contentAlignment = Alignment.BottomCenter
+    if (showHelp) {
+        HelpScreen(onBack = { showHelp = false })
+        return
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(progress)
-                    .background(Color(0xFF4FC3F7))
+            Text("外观", style = MaterialTheme.typography.titleMedium)
+            ThemeMode.entries.forEach { m ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = themeMode == m, onClick = { onThemeModeChange(m) })
+                    Text(m.label)
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            Text("数据备份与恢复", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = {
+                    createJsonLauncher.launch("training_backup_${System.currentTimeMillis()}.json")
+                }) { Text("导出 JSON") }
+                OutlinedButton(onClick = {
+                    createZipLauncher.launch("training_backup_${System.currentTimeMillis()}.zip")
+                }) { Text("导出 ZIP") }
+            }
+            OutlinedButton(onClick = {
+                importLauncher.launch(arrayOf("application/json", "application/zip", "*/*"))
+            }) { Text("导入 JSON / ZIP") }
+            Text(
+                "Markdown 导出在历史页左上角菜单里。JSON/ZIP 用于数据备份与恢复。",
+                style = MaterialTheme.typography.bodySmall
             )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            Text("帮助", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { showHelp = true }) { Text("查看使用说明") }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            Text("动作库", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { vm.restoreDefaultLibrary() }) { Text("恢复默认动作库") }
+            Text("只补回默认动作，不删除你已有的自定义动作。", style = MaterialTheme.typography.bodySmall)
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            Text("版本", style = MaterialTheme.typography.titleMedium)
+            Text("训练记录 2.2 · 计时 · 模板 · 导入导出 · 动作库", style = MaterialTheme.typography.bodySmall)
         }
-        Text(
-            if (shaking) "休息完" else "${restElapsedSec}s",
-            style = MaterialTheme.typography.labelSmall
-        )
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 }
 
-// ===================== 疼痛记录 =====================
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PainDialog(onDismiss: () -> Unit, onConfirm: (String, Int, String) -> Unit) {
-    var location by remember { mutableStateOf(PAIN_LOCATIONS.first()) }
-    var score by remember { mutableStateOf(0f) }
-    var note by remember { mutableStateOf("") }
+fun HelpScreen(onBack: () -> Unit) {
+    BackHandler { onBack() }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("使用说明") }
+        )
+    }) { p ->
+        Column(
+            Modifier.padding(p).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("重量输入", style = MaterialTheme.typography.titleMedium)
+            Text("空或 0 = 自重；正数 = 负重（kg）；负数 = 助力（kg）。")
+            Text("例：卧推写 80 → 80kg；引体写 -40 → 助力40kg；俯卧撑写 0 → 自重。")
+            Text("显示时负数动作名前自动加“助力”，如“助力引体”。")
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("记录疼痛") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("部位")
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    PAIN_LOCATIONS.forEach { p ->
-                        FilterChip(
-                            selected = location == p,
-                            onClick = { location = p },
-                            label = { Text(p) }
-                        )
-                    }
-                }
-                Text("指数：${score.toInt()} / 10")
-                Slider(
-                    value = score, onValueChange = { score = it },
-                    valueRange = 0f..10f, steps = 9
-                )
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
-                    label = { Text("备注") }, modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(location, score.toInt(), note) }) { Text("记录") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            Text("训练流程", style = MaterialTheme.typography.titleMedium)
+            Text("训练页 → 选部位 + 目标 → 选动作 → 填重量/组数/次数/组间休息 → 开始训练 / 添加记录 / 保存模板。")
+            Text("点“开始训练”进入计时界面：方块灰 → 橙（本组计时）→ 绿（完成）；长按橙色方块 → 红（未完成，填实际次数+力竭次数）。")
+
+            Text("组间休息", style = MaterialTheme.typography.titleMedium)
+            Text("每组结束后，方块之间出现杯子：满 → 空 → 摇。点下一个方块立刻停止杯子，并记录本段实际休息时长到上一组。")
+            Text("同一时刻只允许一个方块在计时；同一动作必须按组顺序，不能跳过未完成组开始下一组。")
+
+            Text("核心附加", style = MaterialTheme.typography.titleMedium)
+            Text("部位选“核心”时，动作会合并到当天已有训练里，显示在记录末尾“训练后核心附加”区域。")
+
+            Text("模板与记录", style = MaterialTheme.typography.titleMedium)
+            Text("训练页可直接“从模板开始”。模板在“模板”Tab 管理，支持删除、复制（自动原名+编号）、编辑另存为新。")
+            Text("历史记录长按可“删除”或“保存为模板”。")
+
+            Text("数据备份", style = MaterialTheme.typography.titleMedium)
+            Text("历史页左上角菜单、设置页都可以导入/导出。JSON 与 ZIP 可双向导入；Markdown 只用于查看与分享，不作为导入源。")
+
+            Spacer(Modifier.height(40.dp))
         }
-    )
-}
-
-// ===================== 未完成 =====================
-
-@Composable
-private fun FailBlockDialog(
-    plannedReps: Int,
-    onDismiss: () -> Unit,
-    onConfirm: (Int, Int) -> Unit
-) {
-    var actual by remember { mutableStateOf(plannedReps.toString()) }
-    var failure by remember { mutableStateOf("0") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("未完成") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = actual, onValueChange = { actual = it },
-                    label = { Text("实际完成次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                OutlinedTextField(
-                    value = failure, onValueChange = { failure = it },
-                    label = { Text("其中力竭次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0)
-            }) { Text("确认") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
-}
-
-// ===================== 加动作 =====================
-
-@Composable
-private fun AddExerciseDialog(
-    bodyPart: String,
-    onDismiss: () -> Unit,
-    onConfirm: (ExercisePlan) -> Unit
-) {
-    val library = DEFAULT_EXERCISES[bodyPart].orEmpty()
-    var name by remember { mutableStateOf("") }
-    var weight by remember { mutableStateOf("") }
-    var sets by remember { mutableStateOf("5") }
-    var reps by remember { mutableStateOf("8") }
-    var rest by remember { mutableStateOf("90") }
-    var note by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("加动作") },
-        text = {
-            Column(
-                Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("动作") }, modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    library.forEach { n ->
-                        AssistChip(onClick = { name = n }, label = { Text(n) })
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    OutlinedTextField(
-                        value = weight, onValueChange = { weight = it },
-                        label = { Text("重量") }, modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = sets, onValueChange = { sets = it },
-                        label = { Text("组") }, modifier = Modifier.weight(0.7f)
-                    )
-                    OutlinedTextField(
-                        value = reps, onValueChange = { reps = it },
-                        label = { Text("次") }, modifier = Modifier.weight(0.7f)
-                    )
-                    OutlinedTextField(
-                        value = rest, onValueChange = { rest = it },
-                        label = { Text("休息s") }, modifier = Modifier.weight(0.8f)
-                    )
-                }
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
-                    label = { Text("备注") }, modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank()) {
-                    onConfirm(
-                        ExercisePlan(
-                            name,
-                            weight.toDoubleOrNull() ?: 0.0,
-                            reps.toIntOrNull() ?: 8,
-                            sets.toIntOrNull() ?: 5,
-                            rest.toIntOrNull() ?: 90,
-                            note
-                        )
-                    )
-                }
-            }) { Text("添加") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
+    }
 }
