@@ -150,7 +150,7 @@ private fun EquipmentEditDialog(
         takePic.launch(uri)
     }
 
-    val allExercises = EXERCISES.values.flatten().distinct()
+    val allExercises = DEFAULT_EXERCISES.values.flatten().distinct()
 
     AlertDialog(
         onDismissRequest = onDone,
