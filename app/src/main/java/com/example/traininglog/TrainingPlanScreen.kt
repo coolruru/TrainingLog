@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.example.traininglog
 
 import androidx.compose.animation.AnimatedVisibility
