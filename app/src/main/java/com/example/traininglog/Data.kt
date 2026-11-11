@@ -165,6 +165,17 @@ data class TemplateExercise(
     val orderIndex: Int = 0
 )
 
+@Entity(
+    tableName = "exercise_library",
+    indices = [Index(value = ["bodyPart", "name"], unique = true)]
+)
+data class ExerciseLibraryItem(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bodyPart: String,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 data class TemplateExerciseItem(
     val id: Long,
     val exerciseName: String,
@@ -214,6 +225,8 @@ interface TrainingDao {
     @Update suspend fun updateSession(s: Session)
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteSession(id: Long)
+    @Query("DELETE FROM sessions")
+    suspend fun clearSessions()
 
     @Query("SELECT * FROM exercises ORDER BY id ASC")
     fun observeAllExercises(): Flow<List<ExerciseEntry>>
@@ -266,8 +279,6 @@ interface TrainingDao {
 
     @Query("SELECT * FROM equipment_profile_photos")
     fun observeAllProfilePhotos(): Flow<List<EquipmentProfilePhoto>>
-    @Query("SELECT * FROM equipment_profile_photos WHERE profileId = :profileId ORDER BY createdAt ASC")
-    fun observePhotosByProfile(profileId: Long): Flow<List<EquipmentProfilePhoto>>
     @Query("SELECT * FROM equipment_profile_photos")
     suspend fun getAllProfilePhotos(): List<EquipmentProfilePhoto>
     @Query("SELECT * FROM equipment_profile_photos WHERE profileId = :profileId")
@@ -289,6 +300,18 @@ interface TrainingDao {
     @Insert suspend fun insertTemplateExercise(e: TemplateExercise): Long
     @Query("DELETE FROM template_exercises WHERE templateId = :templateId")
     suspend fun deleteTemplateExercises(templateId: Long)
+
+    @Query("SELECT * FROM exercise_library WHERE bodyPart = :bodyPart ORDER BY createdAt ASC")
+    fun observeLibraryByPart(bodyPart: String): Flow<List<ExerciseLibraryItem>>
+    @Query("SELECT * FROM exercise_library ORDER BY bodyPart ASC, createdAt ASC")
+    suspend fun getAllLibrary(): List<ExerciseLibraryItem>
+    @Query("SELECT * FROM exercise_library WHERE bodyPart = :bodyPart AND name = :name LIMIT 1")
+    suspend fun findLibraryItem(bodyPart: String, name: String): ExerciseLibraryItem?
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertLibraryItem(item: ExerciseLibraryItem): Long
+    @Query("DELETE FROM exercise_library WHERE id = :id")
+    suspend fun deleteLibraryItem(id: Long)
+    @Query("DELETE FROM exercise_library")
+    suspend fun clearLibrary()
 }
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -309,13 +332,7 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("""
-            CREATE TABLE IF NOT EXISTS gyms (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                name TEXT NOT NULL,
-                createdAt INTEGER NOT NULL
-            )
-        """.trimIndent())
+        db.execSQL("CREATE TABLE IF NOT EXISTS gyms (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, createdAt INTEGER NOT NULL)")
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_gyms_name ON gyms(name)")
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS equipment_profiles (
@@ -377,23 +394,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                name TEXT NOT NULL,
-                bodyPart TEXT NOT NULL,
-                goal TEXT NOT NULL,
-                createdAt INTEGER NOT NULL
+                name TEXT NOT NULL, bodyPart TEXT NOT NULL, goal TEXT NOT NULL, createdAt INTEGER NOT NULL
             )
         """.trimIndent())
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS template_exercises (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                templateId INTEGER NOT NULL,
-                exerciseName TEXT NOT NULL,
-                weight REAL NOT NULL,
-                totalSets INTEGER NOT NULL,
-                plannedReps INTEGER NOT NULL,
-                restSeconds INTEGER NOT NULL,
-                notes TEXT NOT NULL,
-                orderIndex INTEGER NOT NULL,
+                templateId INTEGER NOT NULL, exerciseName TEXT NOT NULL,
+                weight REAL NOT NULL, totalSets INTEGER NOT NULL, plannedReps INTEGER NOT NULL,
+                restSeconds INTEGER NOT NULL, notes TEXT NOT NULL, orderIndex INTEGER NOT NULL,
                 FOREIGN KEY(templateId) REFERENCES templates(id) ON DELETE CASCADE
             )
         """.trimIndent())
@@ -407,14 +416,55 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS exercise_library (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                bodyPart TEXT NOT NULL, name TEXT NOT NULL, createdAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_exercise_library_bodyPart_name ON exercise_library(bodyPart, name)")
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS exercise_library (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                bodyPart TEXT NOT NULL, name TEXT NOT NULL, createdAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+        // 迁移时写入默认动作
+        DEFAULT_EXERCISES.forEach { (part, names) ->
+            names.forEach { name ->
+                db.execSQL("INSERT OR IGNORE INTO exercise_library(bodyPart, name, createdAt) VALUES(?,?,?)",
+                    arrayOf(part, name, System.currentTimeMillis()))
+            }
+        }
+    }
+}
+
+private val seedCallback = object : RoomDatabase.Callback() {
+    override fun onOpen(db: SupportSQLiteDatabase) {
+        super.onOpen(db)
+        val c = db.query("SELECT COUNT(*) FROM exercise_library")
+        c.use {
+            if (it.moveToFirst() && it.getInt(0) == 0) {
+                DEFAULT_EXERCISES.forEach { (part, names) ->
+                    names.forEach { name ->
+                        db.execSQL("INSERT OR IGNORE INTO exercise_library(bodyPart, name, createdAt) VALUES(?,?,?)",
+                            arrayOf(part, name, System.currentTimeMillis()))
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Database(
     entities = [
-        Session::class, ExerciseEntry::class, SetEntry::class,
-        LegacyEquipmentPhoto::class,
+        Session::class, ExerciseEntry::class, SetEntry::class, LegacyEquipmentPhoto::class,
         Gym::class, EquipmentProfile::class, EquipmentProfilePhoto::class,
-        PainRecord::class, WorkoutTemplate::class, TemplateExercise::class
+        PainRecord::class, WorkoutTemplate::class, TemplateExercise::class, ExerciseLibraryItem::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -424,23 +474,18 @@ abstract class AppDatabase : RoomDatabase() {
         fun get(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "training.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    context.applicationContext, AppDatabase::class.java, "training.db"
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addCallback(seedCallback)
                     .build().also { INSTANCE = it }
             }
     }
 }
 
 fun assembleSessions(
-    sessions: List<Session>,
-    exercises: List<ExerciseEntry>,
-    sets: List<SetEntry>,
-    profiles: List<EquipmentProfile>,
-    profilePhotos: List<EquipmentProfilePhoto>,
-    gyms: List<Gym>,
-    painRecords: List<PainRecord>
+    sessions: List<Session>, exercises: List<ExerciseEntry>, sets: List<SetEntry>,
+    profiles: List<EquipmentProfile>, profilePhotos: List<EquipmentProfilePhoto>,
+    gyms: List<Gym>, painRecords: List<PainRecord>
 ): List<SessionWithExercises> {
     val exBySession = exercises.groupBy { it.sessionId }
     val setsByExercise = sets.groupBy { it.exerciseId }
@@ -466,11 +511,7 @@ fun assembleSessions(
     }
 }
 
-fun assembleEquipment(
-    profiles: List<EquipmentProfile>,
-    photos: List<EquipmentProfilePhoto>,
-    gyms: List<Gym>
-): List<EquipmentWithPhotos> {
+fun assembleEquipment(profiles: List<EquipmentProfile>, photos: List<EquipmentProfilePhoto>, gyms: List<Gym>): List<EquipmentWithPhotos> {
     val photosByProfile = photos.groupBy { it.profileId }
     val gymById = gyms.associateBy { it.id }
     return profiles.map { p ->
@@ -478,10 +519,7 @@ fun assembleEquipment(
     }
 }
 
-fun assembleTemplates(
-    templates: List<WorkoutTemplate>,
-    exercises: List<TemplateExercise>
-): List<WorkoutTemplateWithExercises> {
+fun assembleTemplates(templates: List<WorkoutTemplate>, exercises: List<TemplateExercise>): List<WorkoutTemplateWithExercises> {
     val byTemplate = exercises.groupBy { it.templateId }
     return templates.map { t ->
         WorkoutTemplateWithExercises(
