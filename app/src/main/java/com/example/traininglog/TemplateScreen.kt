@@ -21,10 +21,10 @@ import java.util.Locale
 @Composable
 fun TemplateScreen(vm: TrainingViewModel) {
     val templates by vm.templates.collectAsState()
-    var editingTemplate by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
+    var editing by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
 
-    if (editingTemplate != null) {
-        TemplateEditScreen(vm = vm, initial = editingTemplate!!, onDone = { editingTemplate = null })
+    if (editing != null) {
+        TemplateEditScreen(vm, editing!!, onDone = { editing = null })
         return
     }
 
@@ -37,12 +37,9 @@ fun TemplateScreen(vm: TrainingViewModel) {
 
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(templates) { t ->
-            TemplateRow(
-                template = t,
-                onOpen = { editingTemplate = t },
+            TemplateRow(t, onOpen = { editing = t },
                 onDelete = { vm.deleteTemplate(t.template.id) },
-                onDuplicate = { vm.duplicateTemplate(t) }
-            )
+                onDuplicate = { vm.duplicateTemplate(t) })
         }
     }
 }
@@ -64,7 +61,7 @@ private fun TemplateRow(
                     style = MaterialTheme.typography.bodySmall)
             }
             Box {
-                IconButton(onClick = { showMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }
+                IconButton(onClick = { showMenu = true }) { Text("⋮") }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(text = { Text("删除") }, onClick = { showMenu = false; onDelete() })
                     DropdownMenuItem(text = { Text("复制") }, onClick = { showMenu = false; onDuplicate() })
@@ -74,7 +71,6 @@ private fun TemplateRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TemplateEditScreen(
     vm: TrainingViewModel,
@@ -84,29 +80,26 @@ private fun TemplateEditScreen(
     val scope = rememberCoroutineScope()
     var bodyPart by remember { mutableStateOf(initial.template.bodyPart) }
     var goal by remember { mutableStateOf(initial.template.goal) }
-    var exercises by remember { mutableStateOf(initial.exercises.map {
-        ExercisePlan(it.exerciseName, it.weight, it.plannedReps, it.totalSets, it.restSeconds, it.notes)
-    }) }
+    var exercises by remember {
+        mutableStateOf(initial.exercises.map {
+            ExercisePlan(it.exerciseName, it.weight, it.plannedReps, it.totalSets, it.restSeconds, it.notes)
+        })
+    }
     var showPicker by remember { mutableStateOf(false) }
     var showNameDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("部位：$bodyPart｜目标：$goal", style = MaterialTheme.typography.titleMedium)
+            Text("编辑模板", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                BODY_PARTS.forEach { p ->
-                    FilterChip(selected = bodyPart == p, onClick = { bodyPart = p }, label = { Text(p) })
-                }
+                BODY_PARTS.forEach { p -> FilterChip(selected = bodyPart == p, onClick = { bodyPart = p }, label = { Text(p) }) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TRAINING_GOALS.forEach { g ->
-                    FilterChip(selected = goal == g, onClick = { goal = g }, label = { Text(g) })
-                }
+                TRAINING_GOALS.forEach { g -> FilterChip(selected = goal == g, onClick = { goal = g }, label = { Text(g) }) }
             }
         }
         HorizontalDivider()
-
         LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -120,7 +113,6 @@ private fun TemplateEditScreen(
             }
             item { Spacer(Modifier.height(60.dp)) }
         }
-
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onDone, modifier = Modifier.weight(1f)) { Text("取消") }
             Button(onClick = { showNameDialog = true }, modifier = Modifier.weight(1f)) { Text("保存") }
@@ -129,18 +121,16 @@ private fun TemplateEditScreen(
 
     if (showPicker) {
         ExercisePickerSheet(
+            vm = vm,
             bodyPart = bodyPart,
             existingNames = exercises.map { it.exerciseName }.toSet(),
             onDismiss = { showPicker = false },
             onConfirm = { names ->
-                exercises = exercises + names.map {
-                    ExercisePlan(it, 0.0, 8, 5, 90, "")
-                }
+                exercises = exercises + names.map { ExercisePlan(it, 0.0, 8, 5, 90, "") }
                 showPicker = false
             }
         )
     }
-
     if (showNameDialog) {
         AlertDialog(
             onDismissRequest = { showNameDialog = false },
@@ -166,43 +156,33 @@ private fun TemplateEditScreen(
 
 @Composable
 private fun TemplateExerciseCard(exercise: ExercisePlan, onChange: (ExercisePlan) -> Unit) {
+    var weightStr by remember(exercise.exerciseName) { mutableStateOf(if (exercise.weight == 0.0) "" else exercise.weight.toString()) }
+    var setsStr by remember(exercise.exerciseName) { mutableStateOf(exercise.totalSets.toString()) }
+    var repsStr by remember(exercise.exerciseName) { mutableStateOf(exercise.plannedReps.toString()) }
+    var restStr by remember(exercise.exerciseName) { mutableStateOf(exercise.restSeconds.toString()) }
     Card {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(exercise.exerciseName, style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(
-                    value = if (exercise.weight == 0.0) "" else exercise.weight.toString(),
-                    onValueChange = { onChange(exercise.copy(weight = it.toDoubleOrNull() ?: 0.0)) },
-                    label = { Text("重量") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1.4f)
-                )
-                OutlinedTextField(
-                    value = exercise.totalSets.toString(),
-                    onValueChange = { onChange(exercise.copy(totalSets = it.toIntOrNull() ?: 1)) },
-                    label = { Text("组数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(0.8f)
-                )
-                OutlinedTextField(
-                    value = exercise.plannedReps.toString(),
-                    onValueChange = { onChange(exercise.copy(plannedReps = it.toIntOrNull() ?: 1)) },
-                    label = { Text("次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(0.8f)
-                )
-                OutlinedTextField(
-                    value = exercise.restSeconds.toString(),
-                    onValueChange = { onChange(exercise.copy(restSeconds = it.toIntOrNull() ?: 0)) },
-                    label = { Text("休息s") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(0.8f)
-                )
+                OutlinedTextField(value = weightStr,
+                    onValueChange = { weightStr = it; onChange(exercise.copy(weight = it.toDoubleOrNull() ?: 0.0)) },
+                    label = { Text("重量") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.weight(1.4f))
+                OutlinedTextField(value = setsStr,
+                    onValueChange = { setsStr = it; onChange(exercise.copy(totalSets = it.toIntOrNull() ?: 0)) },
+                    label = { Text("组数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(0.8f))
+                OutlinedTextField(value = repsStr,
+                    onValueChange = { repsStr = it; onChange(exercise.copy(plannedReps = it.toIntOrNull() ?: 0)) },
+                    label = { Text("次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(0.8f))
+                OutlinedTextField(value = restStr,
+                    onValueChange = { restStr = it; onChange(exercise.copy(restSeconds = it.toIntOrNull() ?: 0)) },
+                    label = { Text("休息s") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(0.8f))
             }
-            OutlinedTextField(
-                value = exercise.notes, onValueChange = { onChange(exercise.copy(notes = it)) },
-                label = { Text("备注") }, modifier = Modifier.fillMaxWidth()
-            )
+            OutlinedTextField(value = exercise.notes, onValueChange = { onChange(exercise.copy(notes = it)) },
+                label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
         }
     }
 }
