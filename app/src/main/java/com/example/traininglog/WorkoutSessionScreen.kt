@@ -9,6 +9,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -25,11 +26,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,9 +96,11 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
                     now = now,
                     cupAfterBlock = restingInfo?.takeIf { it.exIdx == exIdx }?.blockIdx,
                     cupEndMs = restingInfo?.takeIf { it.exIdx == exIdx }?.endMs ?: 0L,
+                    totalCount = active.exercises.size,
                     onClickBlock = { i -> vm.clickBlock(exIdx, i) },
                     onLongPressBlock = { i -> pendingFail = exIdx to i },
-                    onSkip = { vm.skipExercise(exIdx) }
+                    onSkip = { vm.skipExercise(exIdx) },
+                    onMove = { from, to -> vm.moveActiveExercise(from, to) }
                 )
                 Spacer(Modifier.height(4.dp))
             }
@@ -106,10 +111,7 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     if (showPainDialog) {
         PainDialog(
             onDismiss = { showPainDialog = false },
-            onConfirm = { loc, sc, n ->
-                vm.addPainRecord(loc, sc, n)
-                showPainDialog = false
-            }
+            onConfirm = { loc, sc, n -> vm.addPainRecord(loc, sc, n); showPainDialog = false }
         )
     }
     if (pendingFail != null) {
@@ -117,20 +119,14 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
         FailBlockDialog(
             plannedReps = active.exercises[exIdx].plannedReps,
             onDismiss = { pendingFail = null },
-            onConfirm = { a, f ->
-                vm.markBlockFailed(exIdx, setIdx, a, f)
-                pendingFail = null
-            }
+            onConfirm = { a, f -> vm.markBlockFailed(exIdx, setIdx, a, f); pendingFail = null }
         )
     }
     if (showAddExercise) {
         AddExerciseDialog(
             bodyPart = active.bodyPart,
             onDismiss = { showAddExercise = false },
-            onConfirm = { ep ->
-                vm.addExerciseDuringWorkout(ep)
-                showAddExercise = false
-            }
+            onConfirm = { ep -> vm.addExerciseDuringWorkout(ep); showAddExercise = false }
         )
     }
     if (showExitConfirm) {
@@ -154,6 +150,10 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
 private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
 
 private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
+    // 只要有一个 RUNNING 方块，就说明休息已经结束
+    val anyRunning = active.exercises.any { e -> e.blocks.any { it.status == BlockStatus.RUNNING } }
+    if (anyRunning) return null
+
     var firstIdle: Pair<Int, Int>? = null
     outer@ for (exIdx in active.exercises.indices) {
         val ex = active.exercises[exIdx]
@@ -165,7 +165,9 @@ private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
             }
         }
     }
+    // 没有 IDLE，说明全部完成，不显示杯子
     val idle = firstIdle ?: return null
+
     var last: RestingInfo? = null
     outer@ for (exIdx in active.exercises.indices) {
         val ex = active.exercises[exIdx]
@@ -188,10 +190,13 @@ private fun ExerciseRow(
     now: Long,
     cupAfterBlock: Int?,
     cupEndMs: Long,
+    totalCount: Int,
     onClickBlock: (Int) -> Unit,
     onLongPressBlock: (Int) -> Unit,
-    onSkip: () -> Unit
+    onSkip: () -> Unit,
+    onMove: (Int, Int) -> Unit
 ) {
+    val density = LocalDensity.current
     Card {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -205,6 +210,34 @@ private fun ExerciseRow(
                         style = MaterialTheme.typography.bodySmall
                     )
                     TextButton(onClick = onSkip) { Text("跳过") }
+                }
+                // 拖动手柄
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .pointerInput(exIdx, totalCount) {
+                            val thresholdPx = with(density) { 80.dp.toPx() }
+                            var totalDrag = 0f
+                            detectDragGestures(
+                                onDragStart = { totalDrag = 0f },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    totalDrag += dragAmount.y
+                                },
+                                onDragEnd = {
+                                    val rows = (totalDrag / thresholdPx).roundToInt()
+                                    if (rows != 0) {
+                                        val target = (exIdx + rows).coerceIn(0, totalCount - 1)
+                                        if (target != exIdx) onMove(exIdx, target)
+                                    }
+                                    totalDrag = 0f
+                                },
+                                onDragCancel = { totalDrag = 0f }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("≡", style = MaterialTheme.typography.titleMedium)
                 }
             }
             if (ex.notes.isNotBlank()) Text("备注：${ex.notes}", style = MaterialTheme.typography.bodySmall)
@@ -325,15 +358,10 @@ private fun PainDialog(onDismiss: () -> Unit, onConfirm: (String, Int, String) -
                 }
                 Text("指数：${score.toInt()} / 10")
                 Slider(value = score, onValueChange = { score = it }, valueRange = 0f..10f, steps = 9)
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
-                    label = { Text("备注") }, modifier = Modifier.fillMaxWidth()
-                )
+                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(location, score.toInt(), note) }) { Text("记录") }
-        },
+        confirmButton = { TextButton(onClick = { onConfirm(location, score.toInt(), note) }) { Text("记录") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
@@ -347,23 +375,13 @@ private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: 
         title = { Text("未完成") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = actual, onValueChange = { actual = it },
-                    label = { Text("实际完成次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                OutlinedTextField(
-                    value = failure, onValueChange = { failure = it },
-                    label = { Text("其中力竭次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
+                OutlinedTextField(value = actual, onValueChange = { actual = it },
+                    label = { Text("实际完成次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                OutlinedTextField(value = failure, onValueChange = { failure = it },
+                    label = { Text("其中力竭次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0)
-            }) { Text("确认") }
-        },
+        confirmButton = { TextButton(onClick = { onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0) }) { Text("确认") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
@@ -381,62 +399,24 @@ private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm
         onDismissRequest = onDismiss,
         title = { Text("加动作") },
         text = {
-            Column(
-                Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("动作") }, modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    library.forEach { n ->
-                        AssistChip(onClick = { name = n }, label = { Text(n) })
-                    }
+            Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("动作") }, modifier = Modifier.fillMaxWidth())
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    library.forEach { n -> AssistChip(onClick = { name = n }, label = { Text(n) }) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    OutlinedTextField(
-                        value = weight, onValueChange = { weight = it },
-                        label = { Text("重量") }, modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = sets, onValueChange = { sets = it },
-                        label = { Text("组") }, modifier = Modifier.weight(0.7f)
-                    )
-                    OutlinedTextField(
-                        value = reps, onValueChange = { reps = it },
-                        label = { Text("次") }, modifier = Modifier.weight(0.7f)
-                    )
-                    OutlinedTextField(
-                        value = rest, onValueChange = { rest = it },
-                        label = { Text("休息s") }, modifier = Modifier.weight(0.8f)
-                    )
+                    OutlinedTextField(value = weight, onValueChange = { weight = it }, label = { Text("重量") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = sets, onValueChange = { sets = it }, label = { Text("组") }, modifier = Modifier.weight(0.7f))
+                    OutlinedTextField(value = reps, onValueChange = { reps = it }, label = { Text("次") }, modifier = Modifier.weight(0.7f))
+                    OutlinedTextField(value = rest, onValueChange = { rest = it }, label = { Text("休息s") }, modifier = Modifier.weight(0.8f))
                 }
-                OutlinedTextField(
-                    value = note, onValueChange = { note = it },
-                    label = { Text("备注") }, modifier = Modifier.fillMaxWidth()
-                )
+                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank()) {
-                    onConfirm(
-                        ExercisePlan(
-                            exerciseName = name,
-                            weight = weight.toDoubleOrNull() ?: 0.0,
-                            plannedReps = reps.toIntOrNull() ?: 8,
-                            totalSets = sets.toIntOrNull() ?: 5,
-                            restSeconds = rest.toIntOrNull() ?: 90,
-                            notes = note
-                        )
-                    )
-                }
-            }) { Text("添加") }
-        },
+        confirmButton = { TextButton(onClick = {
+            if (name.isNotBlank()) onConfirm(ExercisePlan(name, weight.toDoubleOrNull() ?: 0.0,
+                reps.toIntOrNull() ?: 8, sets.toIntOrNull() ?: 5, rest.toIntOrNull() ?: 90, note))
+        }) { Text("添加") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
