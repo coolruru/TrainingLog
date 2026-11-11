@@ -1,6 +1,6 @@
 package com.example.traininglog
 
-import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -89,8 +89,6 @@ fun HistoryScreen(vm: TrainingViewModel) {
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 
-    // ===== 弹窗都放在最外层，详情页显示时也能弹出 =====
-
     if (showExportMenu) {
         AlertDialog(
             onDismissRequest = { showExportMenu = false },
@@ -113,7 +111,6 @@ fun HistoryScreen(vm: TrainingViewModel) {
         ExportDialog(vm) { showExportDialog = false }
     }
 
-    // 长按二级菜单：只显示三个按钮
     pendingSessionMenu?.let { s ->
         Dialog(onDismissRequest = { pendingSessionMenu = null }) {
             Card(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -150,7 +147,6 @@ fun HistoryScreen(vm: TrainingViewModel) {
                 TextButton(onClick = {
                     vm.deleteSession(s.session.id)
                     pendingDelete = null
-                    snackbar
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
@@ -213,7 +209,7 @@ private fun CalendarView(
         }.groupBy { it.session.date.split("-").getOrNull(2)?.toIntOrNull() ?: 0 }
     }
 
-    Column(Modifier.fillMaxSize().padding(12.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = {
                 when (level) {
@@ -251,7 +247,7 @@ private fun CalendarView(
             else -> DecadeGrid(decadeStart, yearCountMap) { y -> year = y; level = 1 }
         }
 
-        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Box(Modifier.fillMaxWidth().padding(top = 4.dp)) {
             TextButton(
                 onClick = {
                     year = today.get(Calendar.YEAR)
@@ -265,7 +261,7 @@ private fun CalendarView(
 
         if (level == 0 && selectedDay != null) {
             val list = dayPartsMap[selectedDay].orEmpty()
-            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
             if (list.isEmpty()) {
                 Text("${month}月${selectedDay}日 · 休", style = MaterialTheme.typography.bodySmall)
             } else {
@@ -414,7 +410,8 @@ private fun ListView(
     val sorted = remember(all) {
         all.sortedWith(compareByDescending<SessionWithExercises> { it.session.date }.thenByDescending { it.session.createdAt })
     }
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(sorted) { s ->
             Card(
                 modifier = Modifier.fillMaxWidth().combinedClickable(
@@ -433,7 +430,7 @@ private fun ListView(
     }
 }
 
-// ===================== 详情页 =====================
+// ===================== 详情页（重排） =====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -442,56 +439,86 @@ private fun SessionDetailScreen(
     onBack: () -> Unit,
     onLongPress: (SessionWithExercises) -> Unit
 ) {
+    BackHandler { onBack() }
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("${s.session.date}｜${s.session.bodyPart}") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("‹ 返回") } },
-            actions = {
-                TextButton(onClick = { onLongPress(s) }) { Text("⋯") }
-            }
+            actions = { TextButton(onClick = { onLongPress(s) }) { Text("⋯") } }
         )
     }) { p ->
-        LazyColumn(Modifier.padding(p).fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(
+            Modifier.padding(p).fillMaxSize().padding(horizontal = 16.dp)
+        ) {
             item {
-                Card {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("目标：${s.session.goal.ifBlank { "—" }}", style = MaterialTheme.typography.bodyMedium)
-                        if (s.session.durationSeconds > 0)
-                            Text("时长：${formatDuration(s.session.durationSeconds)}", style = MaterialTheme.typography.bodyMedium)
-                        if (s.session.notes.isNotBlank()) Text("备注：${s.session.notes}")
-                        s.painRecords.forEach { pr ->
-                            Text("疼痛：${pr.location} ${pr.score}/10${if (pr.note.isNotBlank()) "（${pr.note}）" else ""}",
-                                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                        }
+                Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    InfoRow("目标", s.session.goal.ifBlank { "—" })
+                    if (s.session.durationSeconds > 0)
+                        InfoRow("时长", formatDuration(s.session.durationSeconds))
+                    if (s.session.notes.isNotBlank())
+                        InfoRow("备注", s.session.notes)
+                    s.painRecords.forEach { pr ->
+                        InfoRow(
+                            "疼痛",
+                            "${pr.location} ${pr.score}/10${if (pr.note.isNotBlank()) "（${pr.note}）" else ""}",
+                            valueColor = MaterialTheme.colorScheme.error
+                        )
                     }
                 }
+                HorizontalDivider()
             }
             items(s.exercises) { ex ->
-                Card {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        val name = if (ex.exercise.weight < 0) "助力${ex.exercise.exerciseName}" else ex.exercise.exerciseName
-                        Text(name, style = MaterialTheme.typography.titleSmall)
-                        Text("${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps}次 × ${ex.exercise.totalSets}组" +
-                            (if (ex.exercise.restSeconds > 0) "，计划组间${ex.exercise.restSeconds}s" else ""),
-                            style = MaterialTheme.typography.bodySmall)
-                        if (ex.exercise.notes.isNotBlank()) Text("备注：${ex.exercise.notes}", style = MaterialTheme.typography.bodySmall)
-                        ex.equipmentProfile?.let { pr ->
-                            Text("器械：${pr.equipmentName.ifBlank { pr.exerciseName }}（${ex.gymName}）",
-                                style = MaterialTheme.typography.bodySmall)
-                        }
-                        ex.sets.forEach { set ->
-                            val mark = if (set.completed) "✓" else "✗"
-                            val f = if (!set.completed) "，力竭${set.failureReps}" else ""
-                            val d = if (set.durationSeconds > 0) "，用时${set.durationSeconds}s" else ""
-                            val r = if (set.restTakenSeconds > 0) "，组后休息${set.restTakenSeconds}s" else ""
-                            Text("第${set.setIndex}组：$mark 实际${set.actualReps}次$f$d$r",
+                Column(Modifier.padding(vertical = 12.dp)) {
+                    val name = if (ex.exercise.weight < 0) "助力${ex.exercise.exerciseName}" else ex.exercise.exerciseName
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text(
+                            "${displayLoad(ex.exercise.weight)} × ${ex.exercise.plannedReps} × ${ex.exercise.totalSets}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (ex.exercise.restSeconds > 0)
+                        Text("组间休息 ${ex.exercise.restSeconds}s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (ex.exercise.notes.isNotBlank())
+                        Text("备注：${ex.exercise.notes}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ex.equipmentProfile?.let { pr ->
+                        Text("器械：${pr.equipmentName.ifBlank { pr.exerciseName }}（${ex.gymName}）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    ex.sets.forEach { set ->
+                        val mark = if (set.completed) "✓" else "✗"
+                        val f = if (!set.completed) " 力竭${set.failureReps}" else ""
+                        val d = if (set.durationSeconds > 0) " · ${set.durationSeconds}s" else ""
+                        val r = if (set.restTakenSeconds > 0) " · 休${set.restTakenSeconds}s" else ""
+                        Row(Modifier.padding(vertical = 2.dp)) {
+                            Text("第${set.setIndex}组",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(56.dp))
+                            Text("$mark ${set.actualReps}次$f$d$r",
                                 style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
+                HorizontalDivider()
             }
             item { Spacer(Modifier.height(60.dp)) }
         }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String, valueColor: Color = MaterialTheme.colorScheme.onSurface) {
+    Row {
+        Text(label, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(48.dp))
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = valueColor)
     }
 }
 
@@ -510,40 +537,34 @@ fun ExportDialog(vm: TrainingViewModel, onDismiss: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
 
     val createJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) {
-            scope.launch {
-                busy = true
-                val ok = vm.exportToJson(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                busy = false
-                if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
-            }
+        if (uri != null) scope.launch {
+            busy = true
+            val ok = vm.exportToJson(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+            busy = false
+            if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
         }
     }
     val createZipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri != null) {
-            scope.launch {
-                busy = true
-                val ok = vm.exportToZip(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                busy = false
-                if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
-            }
+        if (uri != null) scope.launch {
+            busy = true
+            val ok = vm.exportToZip(ctx, uri, from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+            busy = false
+            if (ok) onDismiss() else snackbar.showSnackbar("导出失败")
         }
     }
     val createMdLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
-        if (uri != null) {
-            scope.launch {
-                busy = true
-                try {
-                    val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
-                    val md = MarkdownExporter.build(
-                        sessions,
-                        rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
-                        partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
-                    )
-                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(md.toByteArray()) }
-                    onDismiss()
-                } finally { busy = false }
-            }
+        if (uri != null) scope.launch {
+            busy = true
+            try {
+                val sessions = vm.exportSessions(from.ifBlank { null }, to.ifBlank { null }, selectedParts.toList())
+                val md = MarkdownExporter.build(
+                    sessions,
+                    rangeDesc = if (from.isBlank() && to.isBlank()) "全部" else "${from.ifBlank { "开始" }} ~ ${to.ifBlank { "至今" }}",
+                    partDesc = if (selectedParts.isEmpty()) "全部" else selectedParts.joinToString("、")
+                )
+                ctx.contentResolver.openOutputStream(uri)?.use { it.write(md.toByteArray()) }
+                onDismiss()
+            } finally { busy = false }
         }
     }
 
