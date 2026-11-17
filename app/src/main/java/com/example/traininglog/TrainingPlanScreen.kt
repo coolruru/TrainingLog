@@ -1,6 +1,7 @@
 package com.example.traininglog
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -9,24 +10,29 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrainingPlanScreen(
     vm: TrainingViewModel,
@@ -52,12 +58,11 @@ fun TrainingPlanScreen(
     val showActionArea = selectedBodyPart != null && selectedGoal != null
     val allFilled = exercises.isNotEmpty() && exercises.all { it.totalSets > 0 && it.plannedReps > 0 }
 
-    Box(Modifier.fillMaxSize().imePadding()) {
+    Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxSize().imePadding(),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
-            // 首屏 / 已选状态
             item {
                 if (!showActionArea) {
                     Column(
@@ -132,46 +137,49 @@ fun TrainingPlanScreen(
                     )
                 }
 
-                if (allFilled) {
-                    item {
-                        OutlinedTextField(
-                            value = sessionNotes, onValueChange = { sessionNotes = it },
-                            label = { Text("训练备注（可选）") },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-                    item {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { showTemplateNameDialog = true },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("保存模板") }
-                            Button(
-                                onClick = {
+                item {
+                    OutlinedTextField(
+                        value = sessionNotes, onValueChange = { sessionNotes = it },
+                        label = { Text("训练备注（可选）") },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showTemplateNameDialog = true },
+                            enabled = allFilled,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("保存模板") }
+                        Button(
+                            onClick = {
+                                if (allFilled) {
                                     vm.startWorkout(WorkoutPlan(
                                         date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
                                         bodyPart = selectedBodyPart!!, goal = selectedGoal!!,
                                         sessionNotes = sessionNotes, exercises = exercises
                                     ))
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("开始训练") }
-                            OutlinedButton(
-                                onClick = {
-                                    onOpenAddRecord(
-                                        WorkoutPlan(
-                                            date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-                                            bodyPart = selectedBodyPart!!, goal = selectedGoal!!,
-                                            sessionNotes = sessionNotes, exercises = exercises
-                                        )
-                                    )
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("添加记录") }
-                        }
+                                }
+                            },
+                            enabled = allFilled,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("开始训练") }
+                        OutlinedButton(
+                            onClick = {
+                                if (allFilled) {
+                                    onOpenAddRecord(WorkoutPlan(
+                                        date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
+                                        bodyPart = selectedBodyPart!!, goal = selectedGoal!!,
+                                        sessionNotes = sessionNotes, exercises = exercises
+                                    ))
+                                }
+                            },
+                            enabled = allFilled,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("添加记录") }
                     }
                 }
                 item { Spacer(Modifier.height(60.dp)) }
@@ -189,6 +197,9 @@ fun TrainingPlanScreen(
             onConfirm = { names ->
                 val added = names.filter { n -> exercises.none { it.exerciseName == n } }
                 exercises = exercises + added.map { ExercisePlan(it, 0.0, 8, 5, 90, "") }
+                added.forEach { name ->
+                    scope.launch { vm.ensureLibraryItem(selectedBodyPart ?: "胸", name) }
+                }
                 showExercisePicker = false
             }
         )
@@ -258,34 +269,29 @@ fun ExercisePlanCard(
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(exercise.exerciseName, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                // 拖动手柄
                 Box(
-                    Modifier
-                        .size(40.dp)
-                        .pointerInput(index, totalCount) {
-                            val thresholdPx = with(density) { 60.dp.toPx() }
-                            var totalDrag = 0f
-                            detectDragGestures(
-                                onDragStart = { totalDrag = 0f },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    totalDrag += dragAmount.y
-                                },
-                                onDragEnd = {
-                                    val rows = (totalDrag / thresholdPx).roundToInt()
-                                    if (rows != 0) {
-                                        val target = (index + rows).coerceIn(0, totalCount - 1)
-                                        if (target != index) onMove(index, target)
-                                    }
-                                    totalDrag = 0f
-                                },
-                                onDragCancel = { totalDrag = 0f }
-                            )
-                        },
+                    Modifier.size(40.dp).pointerInput(index, totalCount) {
+                        val thresholdPx = with(density) { 60.dp.toPx() }
+                        var totalDrag = 0f
+                        detectDragGestures(
+                            onDragStart = { totalDrag = 0f },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                totalDrag += dragAmount.y
+                            },
+                            onDragEnd = {
+                                val rows = (totalDrag / thresholdPx).roundToInt()
+                                if (rows != 0) {
+                                    val target = (index + rows).coerceIn(0, totalCount - 1)
+                                    if (target != index) onMove(index, target)
+                                }
+                                totalDrag = 0f
+                            },
+                            onDragCancel = { totalDrag = 0f }
+                        )
+                    },
                     contentAlignment = Alignment.Center
-                ) {
-                    Text("≡", style = MaterialTheme.typography.titleLarge)
-                }
+                ) { Text("≡", style = MaterialTheme.typography.titleLarge) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
@@ -382,7 +388,7 @@ fun ExercisePlanCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExercisePickerSheet(
     vm: TrainingViewModel,
@@ -393,64 +399,79 @@ fun ExercisePickerSheet(
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val library by vm.observeLibrary(bodyPart).collectAsState(initial = emptyList())
+    val allLibrary by vm.allLibrary.collectAsState()
+    val library = remember(allLibrary, bodyPart) { allLibrary.filter { it.bodyPart == bodyPart } }
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var custom by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<ExerciseLibraryItem?>(null) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Box {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("选择动作（$bodyPart）", style = MaterialTheme.typography.titleMedium)
-                LazyColumn(Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    items(library) { item ->
-                        val isExisting = item.name in existingNames
-                        Row(
-                            Modifier.fillMaxWidth().combinedClickable(
-                                enabled = !isExisting,
-                                onClick = {
-                                    selected = if (item.name in selected) selected - item.name else selected + item.name
-                                },
-                                onLongClick = { deleteTarget = item }
-                            ).padding(vertical = 10.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = item.name in selected || isExisting,
-                                enabled = !isExisting,
-                                onCheckedChange = null
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(item.name + if (isExisting) "（已添加）" else "", modifier = Modifier.weight(1f))
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(Modifier.fillMaxSize()) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("选择动作（$bodyPart）") },
+                        navigationIcon = { TextButton(onClick = onDismiss) { Text("取消") } },
+                        actions = {
+                            TextButton(onClick = { onConfirm(selected.toList()) }) { Text("确认") }
+                        }
+                    )
+                }
+            ) { p ->
+                Column(Modifier.padding(p).fillMaxSize()) {
+                    LazyColumn(
+                        Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        items(library, key = { it.id }) { item ->
+                            val isExisting = item.name in existingNames
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .combinedClickable(
+                                        enabled = !isExisting,
+                                        onClick = {
+                                            selected = if (item.name in selected) selected - item.name else selected + item.name
+                                        }
+                                    )
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = item.name in selected || isExisting,
+                                    enabled = !isExisting,
+                                    onCheckedChange = null
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    item.name + if (isExisting) "（已添加）" else "",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { deleteTarget = item }) {
+                                    Text("✕", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         }
                     }
-                }
-                HorizontalDivider()
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = custom, onValueChange = { custom = it },
-                        label = { Text("添加自定义动作") }, modifier = Modifier.weight(1f)
-                    )
-                    Button(onClick = {
-                        if (custom.isNotBlank()) {
+                    HorizontalDivider()
+                    CustomAddRow(
+                        onAdd = { text ->
                             scope.launch {
-                                val ok = vm.addLibraryItem(bodyPart, custom.trim())
+                                val ok = vm.addLibraryItem(bodyPart, text)
                                 if (ok) {
-                                    if (custom.trim() !in selected) selected = selected + custom.trim()
-                                    custom = ""
+                                    if (text !in selected) selected = selected + text
                                 } else snackbar.showSnackbar("该动作已存在")
                             }
                         }
-                    }) { Text("添加") }
+                    )
+                    Spacer(Modifier.height(8.dp))
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
-                    Button(onClick = { onConfirm(selected.toList()) }, modifier = Modifier.weight(1f)) { Text("确认") }
-                }
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
-            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         }
     }
+
     deleteTarget?.let { item ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -465,6 +486,29 @@ fun ExercisePickerSheet(
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
         )
+    }
+}
+
+@Composable
+private fun CustomAddRow(onAdd: (String) -> Unit) {
+    var custom by remember { mutableStateOf("") }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedTextField(
+            value = custom, onValueChange = { custom = it },
+            label = { Text("添加自定义动作") },
+            singleLine = true,
+            modifier = Modifier.weight(1f)
+        )
+        Button(onClick = {
+            if (custom.isNotBlank()) {
+                onAdd(custom.trim())
+                custom = ""
+            }
+        }) { Text("添加") }
     }
 }
 
