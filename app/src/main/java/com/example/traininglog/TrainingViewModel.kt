@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -69,6 +68,9 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
     val templates: StateFlow<List<WorkoutTemplateWithExercises>> = combine(
         dao.observeTemplates(), dao.observeAllTemplateExercises()
     ) { t, e -> assembleTemplates(t, e) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allLibrary: StateFlow<List<ExerciseLibraryItem>> = dao.observeAllLibrary()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _activeWorkout = MutableStateFlow<ActiveWorkout?>(null)
@@ -174,6 +176,53 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
             blocks = (1..ep.totalSets).map { i -> ActiveBlock(setIndex = i, status = BlockStatus.IDLE, actualReps = ep.plannedReps) }
         )
         _activeWorkout.value = w.copy(exercises = w.exercises + newEx)
+        viewModelScope.launch { ensureLibraryItem(w.bodyPart, ep.exerciseName) }
+    }
+
+    fun updateActiveExercise(
+        exIdx: Int,
+        weight: Double,
+        plannedReps: Int,
+        totalSets: Int,
+        restSeconds: Int,
+        notes: String,
+        equipmentProfileId: Long?
+    ) {
+        val w = _activeWorkout.value ?: return
+        val ex = w.exercises.getOrNull(exIdx) ?: return
+        val startedCount = ex.blocks.count { it.status != BlockStatus.IDLE }
+        val minSets = maxOf(startedCount, 1)
+        if (totalSets < minSets) {
+            emitEvent("组数不能少于已开始/完成的 $minSets 组")
+            return
+        }
+        val newBlocks = when {
+            totalSets > ex.blocks.size -> ex.blocks + (ex.blocks.size + 1..totalSets).map { i ->
+                ActiveBlock(setIndex = i, status = BlockStatus.IDLE, actualReps = plannedReps)
+            }
+            totalSets < ex.blocks.size -> ex.blocks.take(totalSets)
+            else -> ex.blocks
+        }
+        val newEx = ex.copy(
+            weight = weight,
+            plannedReps = plannedReps,
+            totalSets = totalSets,
+            restSeconds = restSeconds,
+            notes = notes,
+            equipmentProfileId = equipmentProfileId,
+            blocks = newBlocks
+        )
+        _activeWorkout.value = w.copy(
+            exercises = w.exercises.toMutableList().also { it[exIdx] = newEx }
+        )
+    }
+
+    fun removeActiveExercise(exIdx: Int) {
+        val w = _activeWorkout.value ?: return
+        if (exIdx !in w.exercises.indices) return
+        _activeWorkout.value = w.copy(
+            exercises = w.exercises.toMutableList().also { it.removeAt(exIdx) }
+        )
     }
 
     fun skipExercise(exIdx: Int) {
@@ -289,18 +338,28 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
     // ===== 动作库 =====
 
     fun observeLibrary(bodyPart: String) = dao.observeLibraryByPart(bodyPart)
+
     suspend fun addLibraryItem(bodyPart: String, name: String): Boolean {
         val t = name.trim(); if (t.isEmpty()) return false
         val existing = dao.findLibraryItem(bodyPart, t)
         return if (existing != null) false
         else { dao.insertLibraryItem(ExerciseLibraryItem(bodyPart = bodyPart, name = t)); true }
     }
-    fun deleteLibraryItem(id: Long) = viewModelScope.launch { dao.deleteLibraryItem(id) }
-    fun restoreDefaultLibrary() = viewModelScope.launch {
-        DEFAULT_EXERCISES.forEach { (part, names) ->
-            names.forEach { name -> dao.insertLibraryItem(ExerciseLibraryItem(bodyPart = part, name = name)) }
+
+    suspend fun ensureLibraryItem(bodyPart: String, name: String) {
+        val t = name.trim()
+        if (t.isEmpty()) return
+        if (dao.findLibraryItem(bodyPart, t) == null) {
+            dao.insertLibraryItem(ExerciseLibraryItem(bodyPart = bodyPart, name = t))
         }
     }
+
+    fun ensureLibraryItemAsync(bodyPart: String, name: String) {
+        viewModelScope.launch { ensureLibraryItem(bodyPart, name) }
+    }
+
+    fun deleteLibraryItem(id: Long) = viewModelScope.launch { dao.deleteLibraryItem(id) }
+
     suspend fun getAllLibrary() = dao.getAllLibrary()
 
     // ===== 模板 =====
