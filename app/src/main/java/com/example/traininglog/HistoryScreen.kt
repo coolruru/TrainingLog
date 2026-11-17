@@ -81,13 +81,7 @@ fun HistoryScreen(
             onDismissRequest = { showExportMenu = false },
             title = { Text("数据") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { showExportMenu = false; showExportDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("导出") }
-                    TextButton(onClick = {
-                        showExportMenu = false
-                        importLauncher.launch(arrayOf("application/json", "application/zip", "*/*"))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("导入 JSON / ZIP") }
-                }
+                TextButton(onClick = { showExportMenu = false; showExportDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("导出") }
             },
             confirmButton = { TextButton(onClick = { showExportMenu = false }) { Text("关闭") } }
         )
@@ -363,8 +357,6 @@ private fun ListView(
         }
     }
 }
-
-// ===================== 详情页（独立全屏，由 MainScreen 调用） =====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
