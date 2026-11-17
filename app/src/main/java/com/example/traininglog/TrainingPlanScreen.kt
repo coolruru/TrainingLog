@@ -409,8 +409,8 @@ fun ExercisePickerSheet(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(Modifier.fillMaxSize()) {
-            Scaffold(
-                topBar = {
+            Box(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize()) {
                     TopAppBar(
                         title = { Text("选择动作（$bodyPart）") },
                         navigationIcon = { TextButton(onClick = onDismiss) { Text("取消") } },
@@ -418,9 +418,6 @@ fun ExercisePickerSheet(
                             TextButton(onClick = { onConfirm(selected.toList()) }) { Text("确认") }
                         }
                     )
-                }
-            ) { p ->
-                Column(Modifier.padding(p).fillMaxSize()) {
                     LazyColumn(
                         Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
