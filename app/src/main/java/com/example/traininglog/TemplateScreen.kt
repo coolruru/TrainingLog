@@ -1,11 +1,13 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.example.traininglog
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -81,7 +83,6 @@ private fun TemplateRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TemplateEditScreen(
     vm: TrainingViewModel,
@@ -158,7 +159,7 @@ fun TemplateEditScreen(
     }
 
     if (showPicker) {
-        ExercisePickerSheet(
+        TemplateExercisePickerDialog(
             vm = vm,
             bodyPart = bodyPart,
             existingNames = exercises.map { it.exerciseName }.toSet(),
@@ -192,6 +193,110 @@ fun TemplateEditScreen(
                 }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { showNameDialog = false }) { Text("取消") } }
+        )
+    }
+}
+
+@Composable
+private fun TemplateExercisePickerDialog(
+    vm: TrainingViewModel,
+    bodyPart: String,
+    existingNames: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    val allLibrary by vm.allLibrary.collectAsState()
+    val library = remember(allLibrary, bodyPart) { allLibrary.filter { it.bodyPart == bodyPart } }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var deleteTarget by remember { mutableStateOf<ExerciseLibraryItem?>(null) }
+    var custom by remember { mutableStateOf("") }
+
+    Box {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("选择动作（$bodyPart）") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(library, key = { it.id }) { item ->
+                            val isExisting = item.name in existingNames
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .combinedClickable(
+                                        enabled = !isExisting,
+                                        onClick = {
+                                            selected = if (item.name in selected) selected - item.name else selected + item.name
+                                        }
+                                    )
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = item.name in selected || isExisting,
+                                    enabled = !isExisting,
+                                    onCheckedChange = null
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    item.name + if (isExisting) "（已添加）" else "",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { deleteTarget = item }) {
+                                    Text("✕", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = custom, onValueChange = { custom = it },
+                            label = { Text("添加自定义动作") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = {
+                            val t = custom.trim()
+                            if (t.isNotEmpty()) {
+                                scope.launch {
+                                    val ok = vm.addLibraryItem(bodyPart, t)
+                                    if (ok) {
+                                        if (t !in selected) selected = selected + t
+                                        custom = ""
+                                    } else snackbar.showSnackbar("该动作已存在")
+                                }
+                            }
+                        }) { Text("添加") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onConfirm(selected.toList()) }) { Text("确认") }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        )
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+
+    deleteTarget?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除动作") },
+            text = { Text("从动作库删除“${item.name}”？历史训练记录将保留。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteLibraryItem(item.id)
+                    selected = selected - item.name
+                    deleteTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
         )
     }
 }
