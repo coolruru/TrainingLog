@@ -149,7 +149,6 @@ fun EquipmentScreen(vm: TrainingViewModel) {
         }
     }
 
-    // 长按健身房菜单
     gymLongPress?.let { g ->
         Dialog(onDismissRequest = { gymLongPress = null }) {
             Card(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -214,9 +213,7 @@ fun EquipmentScreen(vm: TrainingViewModel) {
                 TextButton(onClick = {
                     val dir = ctx.filesDir
                     val target = g
-                    MainScope().launch {
-                        vm.deleteGymCascade(target.id, dir)
-                    }
+                    MainScope().launch { vm.deleteGymCascade(target.id, dir) }
                     gymDeleteTarget = null
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
@@ -294,10 +291,7 @@ private fun EquipmentEditDialog(
                 ) { name ->
                     gyms.firstOrNull { it.name == name }?.let { selectedGymId = it.id }
                 }
-                OutlinedTextField(
-                    exercise, { exercise = it }, label = { Text("动作") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
+                OutlinedTextField(exercise, { exercise = it }, label = { Text("动作") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(allExercises.size) { i ->
                         AssistChip(onClick = { exercise = allExercises[i] }, label = { Text(allExercises[i]) })
@@ -377,10 +371,7 @@ private fun EquipmentEditDialog(
             Row {
                 if (initial.id != 0L) {
                     TextButton(onClick = {
-                        scope.launch {
-                            vm.deleteProfile(initial.id, ctx.filesDir)
-                            onDone()
-                        }
+                        scope.launch { vm.deleteProfile(initial.id, ctx.filesDir); onDone() }
                     }) { Text("删除") }
                 }
                 TextButton(onClick = onDone) { Text("取消") }
