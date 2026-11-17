@@ -48,6 +48,8 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     var pendingFail by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var showAddExercise by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<Int?>(null) }
+    var deleteTarget by remember { mutableStateOf<Int?>(null) }
 
     BackHandler { showExitConfirm = true }
 
@@ -94,12 +96,12 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
                     exIdx = exIdx,
                     ex = ex,
                     now = now,
-                    cupAfterBlock = restingInfo?.takeIf { it.exIdx == exIdx }?.blockIdx,
-                    cupEndMs = restingInfo?.takeIf { it.exIdx == exIdx }?.endMs ?: 0L,
+                    restingInfo = restingInfo,
                     totalCount = active.exercises.size,
                     onClickBlock = { i -> vm.clickBlock(exIdx, i) },
                     onLongPressBlock = { i -> pendingFail = exIdx to i },
-                    onSkip = { vm.skipExercise(exIdx) },
+                    onEdit = { editTarget = exIdx },
+                    onDelete = { deleteTarget = exIdx },
                     onMove = { from, to -> vm.moveActiveExercise(from, to) }
                 )
                 Spacer(Modifier.height(4.dp))
@@ -124,10 +126,55 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     }
     if (showAddExercise) {
         AddExerciseDialog(
+            vm = vm,
             bodyPart = active.bodyPart,
             onDismiss = { showAddExercise = false },
-            onConfirm = { ep -> vm.addExerciseDuringWorkout(ep); showAddExercise = false }
+            onConfirm = { ep ->
+                vm.addExerciseDuringWorkout(ep)
+                showAddExercise = false
+            }
         )
+    }
+    if (editTarget != null) {
+        val idx = editTarget!!
+        val ex = active.exercises.getOrNull(idx)
+        if (ex != null) {
+            EditActiveExerciseDialog(
+                vm = vm,
+                ex = ex,
+                onDismiss = { editTarget = null },
+                onConfirm = { weight, reps, sets, rest, notes, eqId ->
+                    vm.updateActiveExercise(idx, weight, reps, sets, rest, notes, eqId)
+                    editTarget = null
+                }
+            )
+        } else editTarget = null
+    }
+    if (deleteTarget != null) {
+        val idx = deleteTarget!!
+        val ex = active.exercises.getOrNull(idx)
+        if (ex != null) {
+            val doneCount = ex.blocks.count { it.status != BlockStatus.IDLE }
+            AlertDialog(
+                onDismissRequest = { deleteTarget = null },
+                title = { Text("删除动作") },
+                text = {
+                    Text(
+                        if (doneCount > 0)
+                            "该动作已有 $doneCount 组开始/完成，删除后这些记录将丢失。确认删除“${ex.exerciseName}”？"
+                        else
+                            "确认删除“${ex.exerciseName}”？"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        vm.removeActiveExercise(idx)
+                        deleteTarget = null
+                    }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
+            )
+        } else deleteTarget = null
     }
     if (showExitConfirm) {
         AlertDialog(
@@ -150,7 +197,6 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
 private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
 
 private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
-    // 只要有一个 RUNNING 方块，就说明休息已经结束
     val anyRunning = active.exercises.any { e -> e.blocks.any { it.status == BlockStatus.RUNNING } }
     if (anyRunning) return null
 
@@ -165,7 +211,6 @@ private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
             }
         }
     }
-    // 没有 IDLE，说明全部完成，不显示杯子
     val idle = firstIdle ?: return null
 
     var last: RestingInfo? = null
@@ -188,60 +233,64 @@ private fun ExerciseRow(
     exIdx: Int,
     ex: ActiveExercise,
     now: Long,
-    cupAfterBlock: Int?,
-    cupEndMs: Long,
+    restingInfo: RestingInfo?,
     totalCount: Int,
     onClickBlock: (Int) -> Unit,
     onLongPressBlock: (Int) -> Unit,
-    onSkip: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
     onMove: (Int, Int) -> Unit
 ) {
     val density = LocalDensity.current
+    var showMenu by remember { mutableStateOf(false) }
+    val isRestingHere = restingInfo != null && restingInfo.exIdx == exIdx
     Card {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val name = if (ex.weight < 0) "助力${ex.exerciseName}" else ex.exerciseName
                 Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                if (ex.skipped) {
-                    Text("已跳过", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    Text(
-                        "${displayLoad(ex.weight)} · ${ex.totalSets}×${ex.plannedReps} · ${ex.restSeconds}s",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    TextButton(onClick = onSkip) { Text("跳过") }
+                Text(
+                    "${displayLoad(ex.weight)} · ${ex.totalSets}×${ex.plannedReps} · ${ex.restSeconds}s",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Box {
+                    IconButton(onClick = { showMenu = true }) { Text("⋮") }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(text = { Text("编辑") }, onClick = { showMenu = false; onEdit() })
+                        DropdownMenuItem(
+                            text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                            onClick = { showMenu = false; onDelete() }
+                        )
+                    }
                 }
-                // 拖动手柄
                 Box(
-                    Modifier
-                        .size(40.dp)
-                        .pointerInput(exIdx, totalCount) {
-                            val thresholdPx = with(density) { 80.dp.toPx() }
-                            var totalDrag = 0f
-                            detectDragGestures(
-                                onDragStart = { totalDrag = 0f },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    totalDrag += dragAmount.y
-                                },
-                                onDragEnd = {
-                                    val rows = (totalDrag / thresholdPx).roundToInt()
-                                    if (rows != 0) {
-                                        val target = (exIdx + rows).coerceIn(0, totalCount - 1)
-                                        if (target != exIdx) onMove(exIdx, target)
-                                    }
-                                    totalDrag = 0f
-                                },
-                                onDragCancel = { totalDrag = 0f }
-                            )
-                        },
+                    Modifier.size(40.dp).pointerInput(exIdx, totalCount) {
+                        val thresholdPx = with(density) { 80.dp.toPx() }
+                        var totalDrag = 0f
+                        detectDragGestures(
+                            onDragStart = { totalDrag = 0f },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                totalDrag += dragAmount.y
+                            },
+                            onDragEnd = {
+                                val rows = (totalDrag / thresholdPx).roundToInt()
+                                if (rows != 0) {
+                                    val target = (exIdx + rows).coerceIn(0, totalCount - 1)
+                                    if (target != exIdx) onMove(exIdx, target)
+                                }
+                                totalDrag = 0f
+                            },
+                            onDragCancel = { totalDrag = 0f }
+                        )
+                    },
                     contentAlignment = Alignment.Center
-                ) {
-                    Text("≡", style = MaterialTheme.typography.titleMedium)
-                }
+                ) { Text("≡", style = MaterialTheme.typography.titleMedium) }
             }
             if (ex.notes.isNotBlank()) Text("备注：${ex.notes}", style = MaterialTheme.typography.bodySmall)
-            if (!ex.skipped) {
+            if (ex.skipped) {
+                Text("已跳过", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            } else {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically
@@ -252,23 +301,52 @@ private fun ExerciseRow(
                             onClick = { onClickBlock(i) },
                             onLongPress = { onLongPressBlock(i) }
                         )
-                        if (cupAfterBlock == i) {
-                            val restElapsed = now - cupEndMs
-                            val restMs = ex.restSeconds * 1000L
-                            val progress = if (restMs > 0)
-                                (1f - restElapsed.toFloat() / restMs).coerceIn(0f, 1f) else 1f
-                            val shaking = restMs > 0 && restElapsed >= restMs
-                            WaterCup(
-                                progress = progress,
-                                shaking = shaking,
-                                restElapsedSec = (restElapsed / 1000).toInt()
-                            )
-                        } else if (i < ex.blocks.size - 1) {
-                            Spacer(Modifier.width(6.dp))
-                        }
+                        if (i < ex.blocks.size - 1) Spacer(Modifier.width(6.dp))
                     }
                 }
+                if (isRestingHere) {
+                    val restElapsed = now - restingInfo!!.endMs
+                    val restMs = ex.restSeconds * 1000L
+                    val progress = if (restMs > 0) (restElapsed.toFloat() / restMs).coerceIn(0f, 1f) else 1f
+                    val remaining = if (restMs > 0) ((restMs - restElapsed) / 1000).coerceAtLeast(0L).toInt() else 0
+                    BlueRestBar(progress = progress, remainingSec = remaining)
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun BlueRestBar(progress: Float, remainingSec: Int) {
+    val isFull = progress >= 1f
+    val infinite = rememberInfiniteTransition()
+    val dx by infinite.animateFloat(
+        initialValue = -2f, targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(120, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+    val modifier = if (isFull) Modifier.offset(x = dx.dp) else Modifier
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.weight(1f).height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Box(
+                    Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF1E88E5))
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isFull) "休息完" else "${remainingSec}s",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -315,29 +393,6 @@ private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLong
 }
 
 @Composable
-private fun WaterCup(progress: Float, shaking: Boolean, restElapsedSec: Int) {
-    val infinite = rememberInfiniteTransition()
-    val dx by infinite.animateFloat(
-        initialValue = -3f, targetValue = 3f,
-        animationSpec = infiniteRepeatable(tween(120, easing = LinearEasing), RepeatMode.Reverse)
-    )
-    val modifier = if (shaking) Modifier.offset(x = dx.dp) else Modifier
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-        Box(
-            Modifier
-                .size(width = 22.dp, height = 32.dp)
-                .clip(RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp, topStart = 2.dp, topEnd = 2.dp))
-                .background(Color(0x11000000))
-                .border(1.dp, Color.Gray, RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp, topStart = 2.dp, topEnd = 2.dp)),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(progress).background(Color(0xFF4FC3F7)))
-        }
-        Text(if (shaking) "休息完" else "${restElapsedSec}s", style = MaterialTheme.typography.labelSmall)
-    }
-}
-
-@Composable
 private fun PainDialog(onDismiss: () -> Unit, onConfirm: (String, Int, String) -> Unit) {
     var location by remember { mutableStateOf(PAIN_LOCATIONS.first()) }
     var score by remember { mutableStateOf(0f) }
@@ -375,10 +430,16 @@ private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: 
         title = { Text("未完成") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = actual, onValueChange = { actual = it },
-                    label = { Text("实际完成次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(value = failure, onValueChange = { failure = it },
-                    label = { Text("其中力竭次数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                OutlinedTextField(
+                    value = actual, onValueChange = { actual = it },
+                    label = { Text("实际完成次数") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = failure, onValueChange = { failure = it },
+                    label = { Text("其中力竭次数") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
             }
         },
         confirmButton = { TextButton(onClick = { onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0) }) { Text("确认") } },
@@ -387,8 +448,94 @@ private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: 
 }
 
 @Composable
-private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm: (ExercisePlan) -> Unit) {
-    val library = DEFAULT_EXERCISES[bodyPart].orEmpty()
+private fun EditActiveExerciseDialog(
+    vm: TrainingViewModel,
+    ex: ActiveExercise,
+    onDismiss: () -> Unit,
+    onConfirm: (weight: Double, reps: Int, sets: Int, rest: Int, notes: String, equipmentProfileId: Long?) -> Unit
+) {
+    var weightStr by remember { mutableStateOf(if (ex.weight == 0.0) "" else ex.weight.toString()) }
+    var setsStr by remember { mutableStateOf(ex.totalSets.toString()) }
+    var repsStr by remember { mutableStateOf(ex.plannedReps.toString()) }
+    var restStr by remember { mutableStateOf(ex.restSeconds.toString()) }
+    var notes by remember { mutableStateOf(ex.notes) }
+    var linkedProfileId by remember { mutableStateOf(ex.equipmentProfileId) }
+    var showEquipmentPicker by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑动作") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(ex.exerciseName, style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = weightStr, onValueChange = { weightStr = it },
+                        label = { Text("重量") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1.4f)
+                    )
+                    OutlinedTextField(
+                        value = setsStr, onValueChange = { setsStr = it },
+                        label = { Text("组数") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.8f)
+                    )
+                    OutlinedTextField(
+                        value = repsStr, onValueChange = { repsStr = it },
+                        label = { Text("次数") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.8f)
+                    )
+                    OutlinedTextField(
+                        value = restStr, onValueChange = { restStr = it },
+                        label = { Text("休息s") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.8f)
+                    )
+                }
+                OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { showEquipmentPicker = true }) {
+                        Text(linkedProfileId?.let { "已关联器械 #$it" } ?: "关联器械")
+                    }
+                    if (linkedProfileId != null) {
+                        TextButton(onClick = { linkedProfileId = null }) { Text("清除") }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val weight = weightStr.toDoubleOrNull() ?: 0.0
+                val sets = setsStr.toIntOrNull() ?: ex.totalSets
+                val reps = repsStr.toIntOrNull() ?: ex.plannedReps
+                val rest = restStr.toIntOrNull() ?: ex.restSeconds
+                onConfirm(weight, reps, sets, rest, notes, linkedProfileId)
+            }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+
+    if (showEquipmentPicker) {
+        ProfilePickerDialog(
+            vm = vm,
+            exerciseName = ex.exerciseName,
+            onDismiss = { showEquipmentPicker = false },
+            onSelect = { linkedProfileId = it.id; showEquipmentPicker = false }
+        )
+    }
+}
+
+@Composable
+private fun AddExerciseDialog(
+    vm: TrainingViewModel,
+    bodyPart: String,
+    onDismiss: () -> Unit,
+    onConfirm: (ExercisePlan) -> Unit
+) {
+    val allLibrary by vm.allLibrary.collectAsState()
+    val library = remember(allLibrary, bodyPart) { allLibrary.filter { it.bodyPart == bodyPart } }
     var name by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
     var sets by remember { mutableStateOf("5") }
@@ -402,7 +549,9 @@ private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm
             Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("动作") }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    library.forEach { n -> AssistChip(onClick = { name = n }, label = { Text(n) }) }
+                    library.forEach { item ->
+                        AssistChip(onClick = { name = item.name }, label = { Text(item.name) })
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     OutlinedTextField(value = weight, onValueChange = { weight = it }, label = { Text("重量") }, modifier = Modifier.weight(1f))
@@ -413,10 +562,14 @@ private fun AddExerciseDialog(bodyPart: String, onDismiss: () -> Unit, onConfirm
                 OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = { TextButton(onClick = {
-            if (name.isNotBlank()) onConfirm(ExercisePlan(name, weight.toDoubleOrNull() ?: 0.0,
-                reps.toIntOrNull() ?: 8, sets.toIntOrNull() ?: 5, rest.toIntOrNull() ?: 90, note))
-        }) { Text("添加") } },
+        confirmButton = {
+            TextButton(onClick = {
+                if (name.isNotBlank()) {
+                    onConfirm(ExercisePlan(name, weight.toDoubleOrNull() ?: 0.0,
+                        reps.toIntOrNull() ?: 8, sets.toIntOrNull() ?: 5, rest.toIntOrNull() ?: 90, note))
+                }
+            }) { Text("添加") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
