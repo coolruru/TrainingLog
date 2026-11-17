@@ -44,20 +44,17 @@ fun MainScreen(
 ) {
     val activeWorkout by vm.activeWorkout.collectAsState()
 
-    // 二级页状态
     var sessionDetail by remember { mutableStateOf<SessionWithExercises?>(null) }
     var addRecordPlan by remember { mutableStateOf<WorkoutPlan?>(null) }
     var helpOpen by remember { mutableStateOf(false) }
     var editingTemplate by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
     var homeSnackbar by remember { mutableStateOf("") }
 
-    // 计时界面
     if (activeWorkout != null) {
         WorkoutSessionScreen(vm = vm, active = activeWorkout!!)
         return
     }
 
-    // 详情页
     if (sessionDetail != null) {
         SessionDetailScreen(
             s = sessionDetail!!,
@@ -67,7 +64,6 @@ fun MainScreen(
         return
     }
 
-    // 添加记录页
     if (addRecordPlan != null) {
         AddRecordScreen(
             plan = addRecordPlan!!,
@@ -81,19 +77,16 @@ fun MainScreen(
         return
     }
 
-    // 帮助页
     if (helpOpen) {
         HelpScreen(onBack = { helpOpen = false })
         return
     }
 
-    // 模板编辑页
     if (editingTemplate != null) {
         TemplateEditScreen(vm, editingTemplate!!, onDone = { editingTemplate = null })
         return
     }
 
-    // 主界面
     var tab by remember { mutableStateOf(0) }
     val titles = listOf("训练", "历史", "器械", "模板", "设置")
     val snackbar = remember { SnackbarHostState() }
@@ -217,14 +210,8 @@ fun SettingsScreen(
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-            Text("动作库", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = { vm.restoreDefaultLibrary() }) { Text("恢复默认动作库") }
-            Text("只补回默认动作，不删除你已有的自定义动作。", style = MaterialTheme.typography.bodySmall)
-
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-
             Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("训练记录 2.3 · 计时 · 模板 · 导入导出 · 动作库 · 排序", style = MaterialTheme.typography.bodySmall)
+            Text("训练记录 2.4 · 计时 · 模板 · 导入导出 · 动作库 · 蓝线计时", style = MaterialTheme.typography.bodySmall)
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -247,10 +234,12 @@ fun HelpScreen(onBack: () -> Unit) {
             Text("训练页 → 选部位 + 目标 → 选动作 → 填重量/组数/次数/组间休息 → 开始训练 / 添加记录 / 保存模板。")
             Text("点“开始训练”进入计时界面：方块灰 → 橙（本组计时）→ 绿（完成）；长按橙色方块 → 红（未完成，填实际次数+力竭次数）。")
             Text("组间休息", style = MaterialTheme.typography.titleMedium)
-            Text("每组结束后，方块之间出现杯子：满 → 空 → 摇。点下一个方块立刻停止杯子，并记录本段实际休息时长到上一组。")
+            Text("每组结束后，方块下方出现蓝色填充线：从左向右填充，剩余秒数显示在右侧。休息结束时蓝线轻微抖动。")
+            Text("点下一个方块立刻停止蓝线，并记录本段实际休息时长到上一组。")
             Text("同一时刻只允许一个方块在计时；同一动作必须按组顺序，不能跳过未完成组开始下一组。")
-            Text("排序", style = MaterialTheme.typography.titleMedium)
-            Text("训练页、计时页、模板编辑页的动作卡都支持拖动手柄排序，拖动后顺序会保存。")
+            Text("排序与编辑", style = MaterialTheme.typography.titleMedium)
+            Text("训练页、计时页、模板编辑页的动作卡都支持拖动手柄排序。")
+            Text("计时页每个动作卡右上角 ⋮ 可编辑参数或删除动作。")
             Text("数据备份", style = MaterialTheme.typography.titleMedium)
             Text("历史页左上角菜单、设置页都可以导入/导出。JSON 与 ZIP 可双向导入；Markdown 只用于查看与分享，不作为导入源。")
             Spacer(Modifier.height(40.dp))
