@@ -304,6 +304,8 @@ interface TrainingDao {
     @Query("SELECT * FROM exercise_library WHERE bodyPart = :bodyPart ORDER BY createdAt ASC")
     fun observeLibraryByPart(bodyPart: String): Flow<List<ExerciseLibraryItem>>
     @Query("SELECT * FROM exercise_library ORDER BY bodyPart ASC, createdAt ASC")
+    fun observeAllLibrary(): Flow<List<ExerciseLibraryItem>>
+    @Query("SELECT * FROM exercise_library ORDER BY bodyPart ASC, createdAt ASC")
     suspend fun getAllLibrary(): List<ExerciseLibraryItem>
     @Query("SELECT * FROM exercise_library WHERE bodyPart = :bodyPart AND name = :name LIMIT 1")
     suspend fun findLibraryItem(bodyPart: String, name: String): ExerciseLibraryItem?
