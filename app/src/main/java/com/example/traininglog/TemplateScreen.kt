@@ -1,5 +1,6 @@
 package com.example.traininglog
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -87,6 +88,7 @@ fun TemplateEditScreen(
     initial: WorkoutTemplateWithExercises,
     onDone: () -> Unit
 ) {
+    BackHandler { onDone() }
     val scope = rememberCoroutineScope()
     var bodyPart by remember { mutableStateOf(initial.template.bodyPart) }
     var goal by remember { mutableStateOf(initial.template.goal) }
@@ -163,6 +165,7 @@ fun TemplateEditScreen(
             onDismiss = { showPicker = false },
             onConfirm = { names ->
                 exercises = exercises + names.map { ExercisePlan(it, 0.0, 8, 5, 90, "") }
+                names.forEach { n -> scope.launch { vm.ensureLibraryItem(bodyPart, n) } }
                 showPicker = false
             }
         )
