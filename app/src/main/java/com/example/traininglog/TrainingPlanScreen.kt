@@ -2,6 +2,9 @@
 
 package com.example.traininglog
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -27,8 +30,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -104,7 +105,11 @@ fun TrainingPlanScreen(
                     ) {
                         Text("${selectedBodyPart} · ${selectedGoal}", style = MaterialTheme.typography.titleMedium)
                         TextButton(onClick = {
-                            selectedBodyPart = null; selectedGoal = null; exercises = emptyList(); sessionNotes = ""
+                            selectedBodyPart = null
+                            selectedGoal = null
+                            exercises = emptyList()
+                            sessionNotes = ""
+                            showExercisePicker = false
                         }) { Text("重选") }
                     }
                 }
@@ -113,13 +118,44 @@ fun TrainingPlanScreen(
             if (showActionArea) {
                 item {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = { showExercisePicker = !showExercisePicker }
+                            )
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("选择动作", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        FilledIconButton(onClick = { showExercisePicker = true }, shape = CircleShape) {
-                            Text("+", style = MaterialTheme.typography.titleLarge)
+                        FilledIconButton(
+                            onClick = { showExercisePicker = !showExercisePicker },
+                            shape = CircleShape
+                        ) {
+                            Text(if (showExercisePicker) "−" else "+", style = MaterialTheme.typography.titleLarge)
                         }
+                    }
+                }
+
+                item {
+                    AnimatedVisibility(
+                        visible = showExercisePicker,
+                        enter = expandVertically(),
+                        exit = shrinkVertically()
+                    ) {
+                        ExerciseDropdownPanel(
+                            vm = vm,
+                            bodyPart = selectedBodyPart ?: "胸",
+                            existingNames = exercises.map { it.exerciseName }.toSet(),
+                            onCancel = { showExercisePicker = false },
+                            onConfirm = { names ->
+                                val added = names.filter { n -> exercises.none { it.exerciseName == n } }
+                                exercises = exercises + added.map { ExercisePlan(it, 0.0, 8, 5, 90, "") }
+                                added.forEach { name ->
+                                    scope.launch { vm.ensureLibraryItem(selectedBodyPart ?: "胸", name) }
+                                }
+                                showExercisePicker = false
+                            }
+                        )
                     }
                 }
 
@@ -161,8 +197,10 @@ fun TrainingPlanScreen(
                                 if (allFilled) {
                                     vm.startWorkout(WorkoutPlan(
                                         date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-                                        bodyPart = selectedBodyPart!!, goal = selectedGoal!!,
-                                        sessionNotes = sessionNotes, exercises = exercises
+                                        bodyPart = selectedBodyPart!!,
+                                        goal = selectedGoal!!,
+                                        sessionNotes = sessionNotes,
+                                        exercises = exercises
                                     ))
                                 }
                             },
@@ -174,8 +212,10 @@ fun TrainingPlanScreen(
                                 if (allFilled) {
                                     onOpenAddRecord(WorkoutPlan(
                                         date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-                                        bodyPart = selectedBodyPart!!, goal = selectedGoal!!,
-                                        sessionNotes = sessionNotes, exercises = exercises
+                                        bodyPart = selectedBodyPart!!,
+                                        goal = selectedGoal!!,
+                                        sessionNotes = sessionNotes,
+                                        exercises = exercises
                                     ))
                                 }
                             },
@@ -188,23 +228,6 @@ fun TrainingPlanScreen(
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-    }
-
-    if (showExercisePicker) {
-        ExercisePickerSheet(
-            vm = vm,
-            bodyPart = selectedBodyPart ?: "胸",
-            existingNames = exercises.map { it.exerciseName }.toSet(),
-            onDismiss = { showExercisePicker = false },
-            onConfirm = { names ->
-                val added = names.filter { n -> exercises.none { it.exerciseName == n } }
-                exercises = exercises + added.map { ExercisePlan(it, 0.0, 8, 5, 90, "") }
-                added.forEach { name ->
-                    scope.launch { vm.ensureLibraryItem(selectedBodyPart ?: "胸", name) }
-                }
-                showExercisePicker = false
-            }
-        )
     }
 
     if (showTemplateNameDialog) {
@@ -221,7 +244,8 @@ fun TrainingPlanScreen(
                 TextButton(onClick = {
                     if (templateName.isNotBlank()) {
                         vm.saveTemplate(templateName, selectedBodyPart!!, selectedGoal!!, exercises)
-                        showTemplateNameDialog = false; templateName = ""
+                        showTemplateNameDialog = false
+                        templateName = ""
                     }
                 }) { Text("保存") }
             },
@@ -241,6 +265,125 @@ fun TrainingPlanScreen(
                 }
                 showTemplatePicker = false
             }
+        )
+    }
+}
+
+@Composable
+private fun ExerciseDropdownPanel(
+    vm: TrainingViewModel,
+    bodyPart: String,
+    existingNames: Set<String>,
+    onCancel: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    val allLibrary by vm.allLibrary.collectAsState()
+    val library = remember(allLibrary, bodyPart) { allLibrary.filter { it.bodyPart == bodyPart } }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var deleteTarget by remember { mutableStateOf<ExerciseLibraryItem?>(null) }
+    var custom by remember { mutableStateOf("") }
+
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                ) {
+                    LazyColumn(
+                        Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        items(library, key = { it.id }) { item ->
+                            val isExisting = item.name in existingNames
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        enabled = !isExisting,
+                                        onClick = {
+                                            selected = if (item.name in selected) selected - item.name
+                                            else selected + item.name
+                                        }
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = item.name in selected || isExisting,
+                                    enabled = !isExisting,
+                                    onCheckedChange = null
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    item.name + if (isExisting) "（已添加）" else "",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { deleteTarget = item }) {
+                                    Text("✕", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = custom,
+                        onValueChange = { custom = it },
+                        label = { Text("添加自定义动作") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(onClick = {
+                        val t = custom.trim()
+                        if (t.isNotEmpty()) {
+                            scope.launch {
+                                val ok = vm.addLibraryItem(bodyPart, t)
+                                if (ok) {
+                                    if (t !in selected) selected = selected + t
+                                    custom = ""
+                                } else snackbar.showSnackbar("该动作已存在")
+                            }
+                        }
+                    }) { Text("添加") }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text("取消") }
+                    Button(onClick = { onConfirm(selected.toList()) }, modifier = Modifier.weight(1f)) { Text("确认") }
+                }
+            }
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+
+    deleteTarget?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除动作") },
+            text = { Text("从动作库删除“${item.name}”？历史训练记录将保留。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteLibraryItem(item.id)
+                    selected = selected - item.name
+                    deleteTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
         )
     }
 }
@@ -387,126 +530,6 @@ fun ExercisePlanCard(
             },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } }
         )
-    }
-}
-
-@Composable
-fun ExercisePickerSheet(
-    vm: TrainingViewModel,
-    bodyPart: String,
-    existingNames: Set<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
-    val allLibrary by vm.allLibrary.collectAsState()
-    val library = remember(allLibrary, bodyPart) { allLibrary.filter { it.bodyPart == bodyPart } }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    var deleteTarget by remember { mutableStateOf<ExerciseLibraryItem?>(null) }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxSize()) {
-                    TopAppBar(
-                        title = { Text("选择动作（$bodyPart）") },
-                        navigationIcon = { TextButton(onClick = onDismiss) { Text("取消") } },
-                        actions = {
-                            TextButton(onClick = { onConfirm(selected.toList()) }) { Text("确认") }
-                        }
-                    )
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        items(library, key = { it.id }) { item ->
-                            val isExisting = item.name in existingNames
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .combinedClickable(
-                                        enabled = !isExisting,
-                                        onClick = {
-                                            selected = if (item.name in selected) selected - item.name else selected + item.name
-                                        }
-                                    )
-                                    .padding(vertical = 10.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = item.name in selected || isExisting,
-                                    enabled = !isExisting,
-                                    onCheckedChange = null
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    item.name + if (isExisting) "（已添加）" else "",
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = { deleteTarget = item }) {
-                                    Text("✕", color = MaterialTheme.colorScheme.error)
-                                }
-                            }
-                        }
-                    }
-                    HorizontalDivider()
-                    CustomAddRow(
-                        onAdd = { text ->
-                            scope.launch {
-                                val ok = vm.addLibraryItem(bodyPart, text)
-                                if (ok) {
-                                    if (text !in selected) selected = selected + text
-                                } else snackbar.showSnackbar("该动作已存在")
-                            }
-                        }
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-            }
-        }
-    }
-
-    deleteTarget?.let { item ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text("删除动作") },
-            text = { Text("从动作库删除“${item.name}”？历史训练记录将保留。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.deleteLibraryItem(item.id)
-                    selected = selected - item.name
-                    deleteTarget = null
-                }) { Text("删除") }
-            },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
-        )
-    }
-}
-
-@Composable
-private fun CustomAddRow(onAdd: (String) -> Unit) {
-    var custom by remember { mutableStateOf("") }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OutlinedTextField(
-            value = custom, onValueChange = { custom = it },
-            label = { Text("添加自定义动作") },
-            singleLine = true,
-            modifier = Modifier.weight(1f)
-        )
-        Button(onClick = {
-            if (custom.isNotBlank()) {
-                onAdd(custom.trim())
-                custom = ""
-            }
-        }) { Text("添加") }
     }
 }
 
