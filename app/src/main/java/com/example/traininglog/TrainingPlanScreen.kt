@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+
 package com.example.traininglog
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -388,7 +390,6 @@ fun ExercisePlanCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExercisePickerSheet(
     vm: TrainingViewModel,
@@ -509,7 +510,6 @@ private fun CustomAddRow(onAdd: (String) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TemplatePickerSheet(
     templates: List<WorkoutTemplateWithExercises>,
