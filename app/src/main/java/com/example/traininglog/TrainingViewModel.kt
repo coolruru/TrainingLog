@@ -24,7 +24,6 @@ data class ActiveBlock(
     val startMs: Long = 0L,
     val endMs: Long = 0L,
     val actualReps: Int = 0,
-    val failureReps: Int = 0,
     val restTakenMs: Long = 0L
 )
 
@@ -57,13 +56,10 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
 
     val sessions: StateFlow<List<SessionWithExercises>> = combine(
         combine(dao.observeSessions(), dao.observeAllExercises(), dao.observeAllSets()) { s, e, st -> Triple(s, e, st) },
-        combine(dao.observeAllProfiles(), dao.observeAllProfilePhotos(), dao.observeGyms()) { p, ph, g -> Triple(p, ph, g) },
-        dao.observeAllPainRecords()
-    ) { (s, e, st), (p, ph, g), pr -> assembleSessions(s, e, st, p, ph, g, pr) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val gyms: StateFlow<List<Gym>> = dao.observeGyms()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        combine(dao.observeAllProfiles(), dao.observeAllProfilePhotos(), dao.observeAllPainRecords()) { p, ph, pr -> Triple(p, ph, pr) }
+    ) { (s, e, st), (p, ph, pr) ->
+        assembleSessions(s, e, st, p, ph, pr)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val templates: StateFlow<List<WorkoutTemplateWithExercises>> = combine(
         dao.observeTemplates(), dao.observeAllTemplateExercises()
@@ -71,6 +67,9 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allLibrary: StateFlow<List<ExerciseLibraryItem>> = dao.observeAllLibrary()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allProfiles: StateFlow<List<EquipmentProfile>> = dao.observeAllProfiles()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _activeWorkout = MutableStateFlow<ActiveWorkout?>(null)
@@ -154,14 +153,16 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
         return null
     }
 
-    fun markBlockFailed(exIdx: Int, setIdx: Int, actualReps: Int, failureReps: Int) {
+    fun markBlockFailed(exIdx: Int, setIdx: Int, actualReps: Int) {
         val w = _activeWorkout.value ?: return
         val ex = w.exercises.getOrNull(exIdx) ?: return
         val block = ex.blocks.getOrNull(setIdx) ?: return
-        if (block.status != BlockStatus.RUNNING) return
+        if (block.status != BlockStatus.RUNNING && block.status != BlockStatus.DONE) return
+        val now = System.currentTimeMillis()
         val newBlock = block.copy(
-            status = BlockStatus.FAILED, endMs = System.currentTimeMillis(),
-            actualReps = actualReps, failureReps = failureReps
+            status = BlockStatus.FAILED,
+            endMs = if (block.endMs > 0) block.endMs else now,
+            actualReps = actualReps
         )
         val newEx = ex.copy(blocks = ex.blocks.toMutableList().also { it[setIdx] = newBlock })
         _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
@@ -204,25 +205,17 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
             else -> ex.blocks
         }
         val newEx = ex.copy(
-            weight = weight,
-            plannedReps = plannedReps,
-            totalSets = totalSets,
-            restSeconds = restSeconds,
-            notes = notes,
-            equipmentProfileId = equipmentProfileId,
-            blocks = newBlocks
+            weight = weight, plannedReps = plannedReps, totalSets = totalSets,
+            restSeconds = restSeconds, notes = notes,
+            equipmentProfileId = equipmentProfileId, blocks = newBlocks
         )
-        _activeWorkout.value = w.copy(
-            exercises = w.exercises.toMutableList().also { it[exIdx] = newEx }
-        )
+        _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it[exIdx] = newEx })
     }
 
     fun removeActiveExercise(exIdx: Int) {
         val w = _activeWorkout.value ?: return
         if (exIdx !in w.exercises.indices) return
-        _activeWorkout.value = w.copy(
-            exercises = w.exercises.toMutableList().also { it.removeAt(exIdx) }
-        )
+        _activeWorkout.value = w.copy(exercises = w.exercises.toMutableList().also { it.removeAt(exIdx) })
     }
 
     fun skipExercise(exIdx: Int) {
@@ -277,7 +270,7 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
                 SetEntry(
                     exerciseId = exId, setIndex = b.setIndex,
                     completed = b.status == BlockStatus.DONE,
-                    actualReps = b.actualReps, failureReps = b.failureReps,
+                    actualReps = b.actualReps,
                     durationSeconds = if (b.endMs > 0 && b.startMs > 0) ((b.endMs - b.startMs) / 1000).toInt() else 0,
                     restTakenSeconds = (b.restTakenMs / 1000).toInt()
                 )
@@ -317,20 +310,67 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
                 restSeconds = ep.restSeconds, orderIndex = idx
             ))
             dao.insertSets((1..ep.totalSets).map { i ->
-                SetEntry(exerciseId = exId, setIndex = i, completed = true, actualReps = ep.plannedReps, failureReps = 0)
+                SetEntry(exerciseId = exId, setIndex = i, completed = true, actualReps = ep.plannedReps)
             })
         }
     }
 
-    fun saveSessionAsTemplate(session: SessionWithExercises, name: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        val tid = dao.insertTemplate(WorkoutTemplate(name = name, bodyPart = session.session.bodyPart, goal = session.session.goal))
-        session.exercises.forEachIndexed { idx, ex ->
-            dao.insertTemplateExercise(TemplateExercise(
-                templateId = tid, exerciseName = ex.exercise.exerciseName,
-                weight = ex.exercise.weight, totalSets = ex.exercise.totalSets,
-                plannedReps = ex.exercise.plannedReps, restSeconds = ex.exercise.restSeconds,
-                notes = ex.exercise.notes, orderIndex = idx
-            ))
+    // ===== 历史记录编辑 =====
+
+    suspend fun loadSessionForEdit(sessionId: Long): SessionWithExercises? {
+        val session = dao.getSessionById(sessionId) ?: return null
+        val exs = dao.getExercisesBySession(sessionId)
+        val sets = dao.getAllSets().filter { set -> exs.any { it.id == set.exerciseId } }
+        val profiles = dao.getAllProfiles()
+        val photos = dao.getAllProfilePhotos()
+        val pains = dao.getAllPainRecords().filter { it.sessionId == sessionId }
+        return assembleSessions(listOf(session), exs, sets, profiles, photos, pains).firstOrNull()
+    }
+
+    fun saveHistoryEdits(
+        session: Session,
+        exercises: List<ExerciseWithSets>,
+        onDone: () -> Unit = {}
+    ) = viewModelScope.launch {
+        dao.updateSession(session)
+
+        val currentExercises = dao.getExercisesBySession(session.id)
+        val currentIds = currentExercises.map { it.id }.toSet()
+        val submittedIds = exercises.map { it.exercise.id }.filter { it > 0 }.toSet()
+
+        // 删除不在列表里的动作
+        currentIds.forEach { id ->
+            if (id !in submittedIds) dao.deleteExercise(id)
+        }
+
+        exercises.forEachIndexed { idx, ex ->
+            val entry = ex.exercise
+            val exId: Long
+            if (entry.id == 0L) {
+                exId = dao.insertExercise(entry.copy(id = 0, sessionId = session.id, orderIndex = idx))
+            } else {
+                dao.updateExercise(entry.copy(sessionId = session.id, orderIndex = idx))
+                exId = entry.id
+            }
+
+            // 组：用现有关联的 id 更新，新的插入，删掉的删除
+            val existingSets = if (entry.id == 0L) emptyList() else dao.getSetsByExercise(exId)
+            val existingSetIds = existingSets.map { it.id }.toSet()
+            val submittedSetIds = ex.sets.map { it.id }.filter { it > 0 }.toSet()
+
+            existingSetIds.forEach { id ->
+                if (id !in submittedSetIds) dao.deleteSet(id)
+            }
+
+            ex.sets.forEachIndexed { sIdx, s ->
+                val newSet = s.copy(exerciseId = exId, setIndex = sIdx + 1)
+                if (s.id == 0L) dao.insertSets(listOf(newSet))
+                else dao.updateSet(newSet)
+            }
+
+            if (entry.exerciseName.isNotBlank()) {
+                ensureLibraryItem(session.bodyPart, entry.exerciseName)
+            }
         }
         onDone()
     }
@@ -374,7 +414,22 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
             ))
         }
     }
+
+    fun saveSessionAsTemplate(session: SessionWithExercises, name: String, onDone: () -> Unit = {}) = viewModelScope.launch {
+        val tid = dao.insertTemplate(WorkoutTemplate(name = name, bodyPart = session.session.bodyPart, goal = session.session.goal))
+        session.exercises.forEachIndexed { idx, ex ->
+            dao.insertTemplateExercise(TemplateExercise(
+                templateId = tid, exerciseName = ex.exercise.exerciseName,
+                weight = ex.exercise.weight, totalSets = ex.exercise.totalSets,
+                plannedReps = ex.exercise.plannedReps, restSeconds = ex.exercise.restSeconds,
+                notes = ex.exercise.notes, orderIndex = idx
+            ))
+        }
+        onDone()
+    }
+
     fun deleteTemplate(id: Long) = viewModelScope.launch { dao.deleteTemplate(id) }
+
     fun duplicateTemplate(t: WorkoutTemplateWithExercises) = viewModelScope.launch {
         val current = templates.value.map { it.template.name }.toSet()
         val base = t.template.name
@@ -392,73 +447,63 @@ class TrainingViewModel(private val dao: TrainingDao) : ViewModel() {
 
     // ===== 器械 =====
 
-    fun addGym(name: String) = viewModelScope.launch {
-        val t = name.trim(); if (t.isEmpty()) return@launch
-        if (dao.findGymByName(t) == null) dao.insertGym(Gym(name = t))
-        else emitEvent("该健身房名称已存在")
-    }
-    fun renameGym(gymId: Long, newName: String) = viewModelScope.launch {
-        val t = newName.trim(); if (t.isEmpty()) return@launch
-        val existing = dao.findGymByName(t)
-        if (existing != null && existing.id != gymId) { emitEvent("该健身房名称已存在"); return@launch }
-        dao.renameGym(gymId, t)
-    }
-    fun deleteGymCascade(gymId: Long, filesDir: File) = viewModelScope.launch {
-        val profiles = dao.getAllProfiles().filter { it.gymId == gymId }
-        profiles.forEach { p ->
-            val photos = dao.getPhotosByProfile(p.id)
-            photos.forEach { ph -> runCatching { File(filesDir, ph.filePath).delete() } }
-            dao.clearExerciseRefsToProfile(p.id)
-            dao.deleteProfile(p.id)
-        }
-        dao.deleteGym(gymId)
-    }
     fun saveProfile(profile: EquipmentProfile, photos: List<PhotoInput>, removedPhotoIds: List<Long>) = viewModelScope.launch {
         val pid = if (profile.id == 0L) dao.insertProfile(profile) else { dao.updateProfile(profile); profile.id }
         photos.forEach { dao.insertProfilePhoto(EquipmentProfilePhoto(profileId = pid, filePath = it.filePath, tag = it.tag)) }
         removedPhotoIds.forEach { dao.deleteProfilePhoto(it) }
     }
+
     suspend fun loadProfilePhotos(profileId: Long) = dao.getPhotosByProfile(profileId)
+
     fun deleteProfile(profileId: Long, filesDir: File) = viewModelScope.launch {
         val photos = dao.getPhotosByProfile(profileId)
         photos.forEach { p -> runCatching { File(filesDir, p.filePath).delete() } }
         dao.clearExerciseRefsToProfile(profileId)
         dao.deleteProfile(profileId)
     }
+
     fun deleteProfilePhoto(photoId: Long, filePath: String, filesDir: File) = viewModelScope.launch {
         runCatching { File(filesDir, filePath).delete() }
         dao.deleteProfilePhoto(photoId)
     }
 
+    suspend fun countRefsToProfile(profileId: Long): Int =
+        dao.countExercisesReferencingProfile(profileId)
+
+    suspend fun getAllProfiles() = dao.getAllProfiles()
+    suspend fun getAllProfilePhotos() = dao.getAllProfilePhotos()
+
+    // ===== 记录删除 =====
+
     fun deleteSession(id: Long) = viewModelScope.launch { dao.deleteSession(id) }
+
+    // ===== 导入导出 =====
 
     suspend fun exportSessions(from: String?, to: String?, parts: List<String>): List<SessionWithExercises> {
         val s = if (from != null && to != null) dao.getBetween(from, to) else dao.getAllSessions()
-        val all = assembleSessions(s, dao.getAllExercises(), dao.getAllSets(),
-            dao.getAllProfiles(), dao.getAllProfilePhotos(), dao.getAllGyms(), dao.getAllPainRecords())
+        val all = assembleSessions(
+            s, dao.getAllExercises(), dao.getAllSets(),
+            dao.getAllProfiles(), dao.getAllProfilePhotos(), dao.getAllPainRecords()
+        )
         return if (parts.isEmpty()) all else all.filter { it.session.bodyPart in parts }
     }
 
     suspend fun exportToJson(ctx: Context, uri: Uri, from: String?, to: String?, parts: List<String>): Boolean {
         val sessions = exportSessions(from, to, parts)
-        val profiles = assembleEquipment(dao.getAllProfiles(), dao.getAllProfilePhotos(), dao.getAllGyms())
-        val json = ImportExport.buildJson(sessions, templates.value, profiles, dao.getAllGyms(), dao.getAllLibrary())
+        val profiles = assembleEquipment(dao.getAllProfiles(), dao.getAllProfilePhotos())
+        val json = ImportExport.buildJson(sessions, templates.value, profiles, dao.getAllLibrary())
         return ImportExport.exportJson(ctx, json, uri)
     }
 
     suspend fun exportToZip(ctx: Context, uri: Uri, from: String?, to: String?, parts: List<String>): Boolean {
         val sessions = exportSessions(from, to, parts)
-        val profiles = assembleEquipment(dao.getAllProfiles(), dao.getAllProfilePhotos(), dao.getAllGyms())
-        val json = ImportExport.buildJson(sessions, templates.value, profiles, dao.getAllGyms(), dao.getAllLibrary())
+        val profiles = assembleEquipment(dao.getAllProfiles(), dao.getAllProfilePhotos())
+        val json = ImportExport.buildJson(sessions, templates.value, profiles, dao.getAllLibrary())
         val photos = dao.getAllProfilePhotos().map { it.filePath }.distinct()
         return ImportExport.exportZip(ctx, json, photos, uri)
     }
 
     suspend fun importFrom(ctx: Context, uri: Uri): ImportResult = ImportExport.importFromUri(ctx, uri)
-
-    suspend fun getAllProfiles() = dao.getAllProfiles()
-    suspend fun getAllProfilePhotos() = dao.getAllProfilePhotos()
-    suspend fun getAllGyms() = dao.getAllGyms()
 }
 
 class TrainingViewModelFactory(private val dao: TrainingDao) : ViewModelProvider.Factory {
