@@ -57,7 +57,6 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded:
     val totalElapsed = ((now - active.startMs) / 1000).toInt()
     val restingInfo = findRestingInfo(active)
 
-    // 外层容器使用高对比度运动风的 surface 背景
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -282,7 +281,7 @@ private fun LazyListScope.contentItems(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spaced espaBy = 4.dp) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     active.painRecords.forEach { p ->
                         Text(
                             "⚠️ 疼痛记录：${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}",
@@ -354,7 +353,6 @@ private fun ExerciseRow(
     var showMenu by remember { mutableStateOf(false) }
     val isRestingHere = restingInfo != null && restingInfo.exIdx == exIdx
 
-    // 采用高对比度运动风的卡片设计：Surface 略高于 Background，带隐秘描边
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(16.dp),
@@ -392,7 +390,6 @@ private fun ExerciseRow(
                         )
                     }
                 }
-                // 拖拽排序手柄
                 Box(
                     Modifier.size(36.dp).pointerInput(exIdx, totalCount) {
                         val thresholdPx = with(density) { 80.dp.toPx() }
@@ -476,7 +473,7 @@ private fun BlueRestBar(progress: Float, remainingSec: Int) {
                 Box(
                     Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f))
                         .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xFF00E5FF)) // 高对比运动风赛博青作为休息进度条
+                        .background(Color(0xFF00E5FF))
                 )
             }
             Spacer(Modifier.width(10.dp))
@@ -492,12 +489,11 @@ private fun BlueRestBar(progress: Float, remainingSec: Int) {
 
 @Composable
 private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLongPress: () -> Unit) {
-    // 运动风语义化色彩定义
     val bg = when (block.status) {
         BlockStatus.IDLE -> MaterialTheme.colorScheme.surfaceVariant
-        BlockStatus.RUNNING -> Color(0xFFFF5C00) // 运动能量橙：正在进行中
-        BlockStatus.DONE -> Color(0xFF10B981)    // 充满力量的专业绿：已完成
-        BlockStatus.FAILED -> Color(0xFFFF3B30)  // 警示红：未完成/失败
+        BlockStatus.RUNNING -> Color(0xFFFF5C00)
+        BlockStatus.DONE -> Color(0xFF10B981)
+        BlockStatus.FAILED -> Color(0xFFFF3B30)
     }
     val textColor = when (block.status) {
         BlockStatus.DONE, BlockStatus.FAILED, BlockStatus.RUNNING -> Color.White
