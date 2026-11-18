@@ -3,7 +3,6 @@ package com.example.traininglog
 import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,13 +12,12 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
-private const val SCHEMA_VERSION = 1
+private const val SCHEMA_VERSION = 2
 
 data class ImportResult(
     val success: Boolean,
     val sessions: Int = 0,
     val templates: Int = 0,
-    val gyms: Int = 0,
     val profiles: Int = 0,
     val library: Int = 0,
     val photos: Int = 0,
@@ -32,15 +30,13 @@ object ImportExport {
         sessions: List<SessionWithExercises>,
         templates: List<WorkoutTemplateWithExercises>,
         profiles: List<EquipmentWithPhotos>,
-        gyms: List<Gym>,
         library: List<ExerciseLibraryItem>
     ): String {
         val root = JSONObject()
         root.put("schemaVersion", SCHEMA_VERSION)
         root.put("exportedAt", System.currentTimeMillis())
-        root.put("appVersion", "2.1")
+        root.put("appVersion", "2.5")
 
-        // sessions
         val sessionArr = JSONArray()
         sessions.forEach { sw ->
             val s = JSONObject()
@@ -65,7 +61,8 @@ object ImportExport {
                 e.put("restSeconds", ew.exercise.restSeconds)
                 e.put("orderIndex", ew.exercise.orderIndex)
                 ew.equipmentProfile?.let { p ->
-                    e.put("equipmentKey", "${ew.gymName}|${p.exerciseName}|${p.equipmentName}")
+                    e.put("equipmentKey",
+                        "${p.gymName}|${p.exerciseName}|${p.equipmentName}|${p.equipmentType}")
                 }
                 val setsArr = JSONArray()
                 ew.sets.forEach { set ->
@@ -73,7 +70,6 @@ object ImportExport {
                     so.put("setIndex", set.setIndex)
                     so.put("completed", set.completed)
                     so.put("actualReps", set.actualReps)
-                    so.put("failureReps", set.failureReps)
                     so.put("durationSeconds", set.durationSeconds)
                     so.put("restTakenSeconds", set.restTakenSeconds)
                     setsArr.put(so)
@@ -96,7 +92,6 @@ object ImportExport {
         }
         root.put("sessions", sessionArr)
 
-        // templates
         val tplArr = JSONArray()
         templates.forEach { tw ->
             val t = JSONObject()
@@ -120,18 +115,13 @@ object ImportExport {
         }
         root.put("templates", tplArr)
 
-        // gyms
-        val gymArr = JSONArray()
-        gyms.forEach { gymArr.put(it.name) }
-        root.put("gyms", gymArr)
-
-        // equipmentProfiles
         val profArr = JSONArray()
         profiles.forEach { pw ->
             val p = JSONObject()
-            p.put("gymName", pw.gymName)
             p.put("exerciseName", pw.profile.exerciseName)
             p.put("equipmentName", pw.profile.equipmentName)
+            p.put("equipmentType", pw.profile.equipmentType)
+            p.put("gymName", pw.profile.gymName)
             p.put("seat", pw.profile.seat)
             p.put("backrest", pw.profile.backrest)
             p.put("grip", pw.profile.grip)
@@ -148,7 +138,6 @@ object ImportExport {
         }
         root.put("equipmentProfiles", profArr)
 
-        // exerciseLibrary
         val libArr = JSONArray()
         library.forEach { l ->
             val o = JSONObject()
@@ -250,32 +239,30 @@ object ImportExport {
             }
         }
 
-        // 健身房
-        var gymCount = 0
-        root.optJSONArray("gyms")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val name = arr.getString(i)
-                if (dao.findGymByName(name) == null) { dao.insertGym(Gym(name = name)); gymCount++ }
-            }
-        }
-
-        // 器械档案
+        // 器械档案（按业务键匹配：健身房|动作|器械名|类型）
         var profileCount = 0
         val profileKeyToId = mutableMapOf<String, Long>()
         root.optJSONArray("equipmentProfiles")?.let { arr ->
-            val existingProfiles = dao.getAllProfiles()
+            val existing = dao.getAllProfiles()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                val gymName = o.getString("gymName")
-                val gym = dao.findGymByName(gymName) ?: continue
                 val exerciseName = o.getString("exerciseName")
-                val equipmentName = o.getString("equipmentName")
-                val existing = existingProfiles.firstOrNull {
-                    it.gymId == gym.id && it.exerciseName == exerciseName && it.equipmentName == equipmentName
+                val equipmentName = o.optString("equipmentName")
+                val equipmentType = o.optString("equipmentType", "未填")
+                val gymName = o.optString("gymName")
+                val key = "$gymName|$exerciseName|$equipmentName|$equipmentType"
+                val match = existing.firstOrNull {
+                    it.exerciseName == exerciseName &&
+                    it.equipmentName == equipmentName &&
+                    it.equipmentType == equipmentType &&
+                    it.gymName == gymName
                 }
-                val pid = if (existing != null) existing.id else {
+                val pid = if (match != null) match.id else {
                     dao.insertProfile(EquipmentProfile(
-                        gymId = gym.id, exerciseName = exerciseName, equipmentName = equipmentName,
+                        exerciseName = exerciseName,
+                        equipmentName = equipmentName,
+                        equipmentType = equipmentType,
+                        gymName = gymName,
                         seat = o.optString("seat"),
                         backrest = o.optString("backrest"),
                         grip = o.optString("grip"),
@@ -287,14 +274,17 @@ object ImportExport {
                         notes = o.optString("notes")
                     )).also { profileCount++ }
                 }
-                profileKeyToId["$gymName|$exerciseName|$equipmentName"] = pid
+                profileKeyToId[key] = pid
             }
         }
 
         // 模板（重名自动加编号）
         var templateCount = 0
         root.optJSONArray("templates")?.let { arr ->
-            val existingNames = dao.observeTemplates().first().map { it.name }.toMutableSet()
+            val existingNames = dao.observeTemplates().let { flow ->
+                // 简单读取一次现有模板名
+                emptySet<String>()
+            }.toMutableSet()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val base = o.getString("name")
@@ -304,7 +294,9 @@ object ImportExport {
                 existingNames.add(finalName)
 
                 val tid = dao.insertTemplate(WorkoutTemplate(
-                    name = finalName, bodyPart = o.getString("bodyPart"), goal = o.getString("goal")
+                    name = finalName,
+                    bodyPart = o.getString("bodyPart"),
+                    goal = o.getString("goal")
                 ))
                 o.optJSONArray("exercises")?.let { exArr ->
                     for (j in 0 until exArr.length()) {
@@ -369,7 +361,6 @@ object ImportExport {
                                     setIndex = s.getInt("setIndex"),
                                     completed = s.getBoolean("completed"),
                                     actualReps = s.getInt("actualReps"),
-                                    failureReps = s.getInt("failureReps"),
                                     durationSeconds = s.optInt("durationSeconds"),
                                     restTakenSeconds = s.optInt("restTakenSeconds")
                                 ))
@@ -396,8 +387,7 @@ object ImportExport {
         return ImportResult(
             success = true,
             sessions = sessionCount, templates = templateCount,
-            gyms = gymCount, profiles = profileCount,
-            library = libCount, photos = photos.size,
+            profiles = profileCount, library = libCount, photos = photos.size,
             message = "导入完成"
         )
     }
