@@ -36,7 +36,7 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
+fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded: Boolean = false) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(100); now = System.currentTimeMillis() } }
 
@@ -56,57 +56,67 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
     val totalElapsed = ((now - active.startMs) / 1000).toInt()
     val restingInfo = findRestingInfo(active)
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(formatDuration(totalElapsed), fontWeight = FontWeight.Bold)
-                        Text("${active.bodyPart} · ${active.goal}", style = MaterialTheme.typography.bodySmall)
-                    }
-                },
-                actions = {
-                    TextButton(onClick = { showPainDialog = true }) { Text("疼痛") }
-                    TextButton(onClick = { showAddExercise = true }) { Text("加动作") }
-                    TextButton(onClick = { showExitConfirm = true }) { Text("结束") }
-                }
+    val contentModifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)
+
+    if (embedded) {
+        Column(Modifier.fillMaxSize()) {
+            SessionTopBar(
+                elapsed = totalElapsed,
+                bodyPart = active.bodyPart,
+                goal = active.goal,
+                onPain = { showPainDialog = true },
+                onAdd = { showAddExercise = true },
+                onEnd = { showExitConfirm = true }
             )
-        }
-    ) { padding ->
-        LazyColumn(
-            Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (active.painRecords.isNotEmpty()) {
-                item {
-                    Column {
-                        active.painRecords.forEach { p ->
-                            Text(
-                                "疼痛：${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
+            Box(Modifier.weight(1f)) {
+                LazyColumn(
+                    contentModifier,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    contentItems(
+                        active, now, restingInfo,
+                        onBlockClick = { exIdx, setIdx -> vm.clickBlock(exIdx, setIdx) },
+                        onBlockLongPress = { exIdx, setIdx -> pendingFail = exIdx to setIdx },
+                        onEdit = { exIdx -> editTarget = exIdx },
+                        onDelete = { exIdx -> deleteTarget = exIdx },
+                        onMove = { from, to -> vm.moveActiveExercise(from, to) }
+                    )
                 }
+                SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
-            itemsIndexed(active.exercises) { exIdx, ex ->
-                ExerciseRow(
-                    exIdx = exIdx,
-                    ex = ex,
-                    now = now,
-                    restingInfo = restingInfo,
-                    totalCount = active.exercises.size,
-                    onClickBlock = { i -> vm.clickBlock(exIdx, i) },
-                    onLongPressBlock = { i -> pendingFail = exIdx to i },
-                    onEdit = { editTarget = exIdx },
-                    onDelete = { deleteTarget = exIdx },
+        }
+    } else {
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(formatDuration(totalElapsed), fontWeight = FontWeight.Bold)
+                            Text("${active.bodyPart} · ${active.goal}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
+                    actions = {
+                        TextButton(onClick = { showPainDialog = true }) { Text("疼痛") }
+                        TextButton(onClick = { showAddExercise = true }) { Text("加动作") }
+                        TextButton(onClick = { showExitConfirm = true }) { Text("结束") }
+                    }
+                )
+            }
+        ) { padding ->
+            LazyColumn(
+                Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                contentItems(
+                    active, now, restingInfo,
+                    onBlockClick = { exIdx, setIdx -> vm.clickBlock(exIdx, setIdx) },
+                    onBlockLongPress = { exIdx, setIdx -> pendingFail = exIdx to setIdx },
+                    onEdit = { exIdx -> editTarget = exIdx },
+                    onDelete = { exIdx -> deleteTarget = exIdx },
                     onMove = { from, to -> vm.moveActiveExercise(from, to) }
                 )
-                Spacer(Modifier.height(4.dp))
             }
-            item { Spacer(Modifier.height(60.dp)) }
         }
     }
 
@@ -129,10 +139,7 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
             vm = vm,
             bodyPart = active.bodyPart,
             onDismiss = { showAddExercise = false },
-            onConfirm = { ep ->
-                vm.addExerciseDuringWorkout(ep)
-                showAddExercise = false
-            }
+            onConfirm = { ep -> vm.addExerciseDuringWorkout(ep); showAddExercise = false }
         )
     }
     if (editTarget != null) {
@@ -192,6 +199,72 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout) {
             }
         )
     }
+}
+
+@Composable
+private fun SessionTopBar(
+    elapsed: Int,
+    bodyPart: String,
+    goal: String,
+    onPain: () -> Unit,
+    onAdd: () -> Unit,
+    onEnd: () -> Unit
+) {
+    Surface(tonalElevation = 2.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(formatDuration(elapsed), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("$bodyPart · $goal", style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onPain) { Text("疼痛") }
+            TextButton(onClick = onAdd) { Text("加动作") }
+            TextButton(onClick = onEnd) { Text("结束") }
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.contentItems(
+    active: ActiveWorkout,
+    now: Long,
+    restingInfo: RestingInfo?,
+    onBlockClick: (Int, Int) -> Unit,
+    onBlockLongPress: (Int, Int) -> Unit,
+    onEdit: (Int) -> Unit,
+    onDelete: (Int) -> Unit,
+    onMove: (Int, Int) -> Unit
+) {
+    if (active.painRecords.isNotEmpty()) {
+        item {
+            Column {
+                active.painRecords.forEach { p ->
+                    Text(
+                        "疼痛：${p.location} ${p.score}/10${if (p.note.isNotBlank()) "（${p.note}）" else ""}",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+    itemsIndexed(active.exercises) { exIdx, ex ->
+        ExerciseRow(
+            exIdx = exIdx,
+            ex = ex,
+            now = now,
+            restingInfo = restingInfo,
+            totalCount = active.exercises.size,
+            onClickBlock = { i -> onBlockClick(exIdx, i) },
+            onLongPressBlock = { i -> onBlockLongPress(exIdx, i) },
+            onEdit = { onEdit(exIdx) },
+            onDelete = { onDelete(exIdx) },
+            onMove = onMove
+        )
+        Spacer(Modifier.height(4.dp))
+    }
+    item { Spacer(Modifier.height(60.dp)) }
 }
 
 private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
