@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -56,8 +58,6 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded:
     val totalElapsed = ((now - active.startMs) / 1000).toInt()
     val restingInfo = findRestingInfo(active)
 
-    val contentModifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)
-
     if (embedded) {
         Column(Modifier.fillMaxSize()) {
             SessionTopBar(
@@ -70,11 +70,10 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded:
             )
             Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentModifier,
+                    Modifier.fillMaxSize().padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    contentItems(
-                        active, now, restingInfo,
+                    contentItems(active, now, restingInfo,
                         onBlockClick = { exIdx, setIdx -> vm.clickBlock(exIdx, setIdx) },
                         onBlockLongPress = { exIdx, setIdx -> pendingFail = exIdx to setIdx },
                         onEdit = { exIdx -> editTarget = exIdx },
@@ -108,8 +107,7 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded:
                 Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                contentItems(
-                    active, now, restingInfo,
+                contentItems(active, now, restingInfo,
                     onBlockClick = { exIdx, setIdx -> vm.clickBlock(exIdx, setIdx) },
                     onBlockLongPress = { exIdx, setIdx -> pendingFail = exIdx to setIdx },
                     onEdit = { exIdx -> editTarget = exIdx },
@@ -128,10 +126,19 @@ fun WorkoutSessionScreen(vm: TrainingViewModel, active: ActiveWorkout, embedded:
     }
     if (pendingFail != null) {
         val (exIdx, setIdx) = pendingFail!!
+        val block = active.exercises[exIdx].blocks.getOrNull(setIdx)
+        val defaultReps = when (block?.status) {
+            BlockStatus.DONE -> block.actualReps
+            BlockStatus.RUNNING -> active.exercises[exIdx].plannedReps
+            else -> active.exercises[exIdx].plannedReps
+        }
         FailBlockDialog(
-            plannedReps = active.exercises[exIdx].plannedReps,
+            defaultReps = defaultReps,
             onDismiss = { pendingFail = null },
-            onConfirm = { a, f -> vm.markBlockFailed(exIdx, setIdx, a, f); pendingFail = null }
+            onConfirm = { a ->
+                vm.markBlockFailed(exIdx, setIdx, a)
+                pendingFail = null
+            }
         )
     }
     if (showAddExercise) {
@@ -226,7 +233,7 @@ private fun SessionTopBar(
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.contentItems(
+private fun LazyListScope.contentItems(
     active: ActiveWorkout,
     now: Long,
     restingInfo: RestingInfo?,
@@ -455,7 +462,13 @@ private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLong
                 .background(bg)
                 .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
                 .pointerInput(block) {
-                    detectTapGestures(onTap = { onClick() }, onLongPress = { onLongPress() })
+                    detectTapGestures(
+                        onTap = { onClick() },
+                        onLongPress = {
+                            // 未开始组不允许长按；其他状态均可触发未完成弹窗
+                            if (block.status != BlockStatus.IDLE) onLongPress()
+                        }
+                    )
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -495,27 +508,22 @@ private fun PainDialog(onDismiss: () -> Unit, onConfirm: (String, Int, String) -
 }
 
 @Composable
-private fun FailBlockDialog(plannedReps: Int, onDismiss: () -> Unit, onConfirm: (Int, Int) -> Unit) {
-    var actual by remember { mutableStateOf(plannedReps.toString()) }
-    var failure by remember { mutableStateOf("0") }
+private fun FailBlockDialog(defaultReps: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var actual by remember { mutableStateOf(defaultReps.toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("未完成") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = actual, onValueChange = { actual = it },
-                    label = { Text("实际完成次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                OutlinedTextField(
-                    value = failure, onValueChange = { failure = it },
-                    label = { Text("其中力竭次数") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-            }
+            OutlinedTextField(
+                value = actual, onValueChange = { actual = it },
+                label = { Text("实际完成次数") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
         },
-        confirmButton = { TextButton(onClick = { onConfirm(actual.toIntOrNull() ?: 0, failure.toIntOrNull() ?: 0) }) { Text("确认") } },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(actual.toIntOrNull() ?: 0) }) { Text("确认") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
@@ -532,8 +540,14 @@ private fun EditActiveExerciseDialog(
     var repsStr by remember { mutableStateOf(ex.plannedReps.toString()) }
     var restStr by remember { mutableStateOf(ex.restSeconds.toString()) }
     var notes by remember { mutableStateOf(ex.notes) }
-    var linkedProfileId by remember { mutableStateOf(ex.equipmentProfileId) }
+    var linkedProfile by remember { mutableStateOf<EquipmentProfile?>(null) }
     var showEquipmentPicker by remember { mutableStateOf(false) }
+
+    LaunchedEffect(ex.equipmentProfileId) {
+        if (ex.equipmentProfileId != null) {
+            linkedProfile = vm.getAllProfiles().firstOrNull { it.id == ex.equipmentProfileId }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -570,10 +584,10 @@ private fun EditActiveExerciseDialog(
                 OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("备注") }, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { showEquipmentPicker = true }) {
-                        Text(linkedProfileId?.let { "已关联器械 #$it" } ?: "关联器械")
+                        Text(linkedProfile?.let { "已关联：${it.equipmentName.ifBlank { it.exerciseName }}" } ?: "关联器械")
                     }
-                    if (linkedProfileId != null) {
-                        TextButton(onClick = { linkedProfileId = null }) { Text("清除") }
+                    if (linkedProfile != null) {
+                        TextButton(onClick = { linkedProfile = null }) { Text("清除") }
                     }
                 }
             }
@@ -584,7 +598,7 @@ private fun EditActiveExerciseDialog(
                 val sets = setsStr.toIntOrNull() ?: ex.totalSets
                 val reps = repsStr.toIntOrNull() ?: ex.plannedReps
                 val rest = restStr.toIntOrNull() ?: ex.restSeconds
-                onConfirm(weight, reps, sets, rest, notes, linkedProfileId)
+                onConfirm(weight, reps, sets, rest, notes, linkedProfile?.id)
             }) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
@@ -595,7 +609,7 @@ private fun EditActiveExerciseDialog(
             vm = vm,
             exerciseName = ex.exerciseName,
             onDismiss = { showEquipmentPicker = false },
-            onSelect = { linkedProfileId = it.id; showEquipmentPicker = false }
+            onSelect = { linkedProfile = it; showEquipmentPicker = false }
         )
     }
 }
