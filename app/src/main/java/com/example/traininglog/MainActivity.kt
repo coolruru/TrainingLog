@@ -44,6 +44,10 @@ fun MainScreen(
 ) {
     val activeWorkout by vm.activeWorkout.collectAsState()
 
+    // tab 提升到所有二级页 return 之前，保证进入/退出二级页不丢失
+    var tab by remember { mutableStateOf(0) }
+    val titles = listOf("训练", "历史", "器械", "模板", "设置")
+
     var sessionDetail by remember { mutableStateOf<SessionWithExercises?>(null) }
     var historyEditSession by remember { mutableStateOf<SessionWithExercises?>(null) }
     var addRecordPlan by remember { mutableStateOf<WorkoutPlan?>(null) }
@@ -51,21 +55,25 @@ fun MainScreen(
     var editingTemplate by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
     var homeSnackbar by remember { mutableStateOf("") }
 
-    if (sessionDetail != null) {
-        SessionDetailScreen(
-            s = sessionDetail!!,
-            onBack = { sessionDetail = null },
-            onEditHistory = { historyEditSession = sessionDetail },
-            onSavedAsTemplate = { homeSnackbar = it }
-        )
-        return
-    }
-
     if (historyEditSession != null) {
         HistoryEditScreen(
             vm = vm,
             session = historyEditSession!!,
-            onBack = { historyEditSession = null; sessionDetail = null }
+            onBack = { historyEditSession = null }
+        )
+        return
+    }
+
+    if (sessionDetail != null) {
+        SessionDetailScreen(
+            s = sessionDetail!!,
+            onBack = { sessionDetail = null },
+            onEditHistory = {
+                val current = sessionDetail
+                historyEditSession = current
+                sessionDetail = null
+            },
+            onSavedAsTemplate = { homeSnackbar = it }
         )
         return
     }
@@ -93,8 +101,6 @@ fun MainScreen(
         return
     }
 
-    var tab by remember { mutableStateOf(0) }
-    val titles = listOf("训练", "历史", "器械", "模板", "设置")
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(homeSnackbar) {
         if (homeSnackbar.isNotEmpty()) {
