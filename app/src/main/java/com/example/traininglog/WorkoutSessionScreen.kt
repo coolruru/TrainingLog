@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -276,29 +275,26 @@ private fun LazyListScope.contentItems(
 
 private data class RestingInfo(val exIdx: Int, val blockIdx: Int, val endMs: Long)
 
+/**
+ * 蓝线显示规则：
+ * - 有任意 RUNNING 组：不显示（正在做组）
+ * - 所有非跳过动作都没有 IDLE 组（全部完成）：不显示
+ * - 否则：显示在全局最后一个 DONE/FAILED 组后面
+ *   （跨动作时取真正的最后完成的那个组，不会回退到上一个动作）
+ */
 private fun findRestingInfo(active: ActiveWorkout): RestingInfo? {
-    val anyRunning = active.exercises.any { e -> e.blocks.any { it.status == BlockStatus.RUNNING } }
-    if (anyRunning) return null
+    if (active.exercises.any { e -> e.blocks.any { it.status == BlockStatus.RUNNING } }) return null
 
-    var firstIdle: Pair<Int, Int>? = null
-    outer@ for (exIdx in active.exercises.indices) {
-        val ex = active.exercises[exIdx]
-        if (ex.skipped) continue
-        for (setIdx in ex.blocks.indices) {
-            if (ex.blocks[setIdx].status == BlockStatus.IDLE) {
-                firstIdle = exIdx to setIdx
-                break@outer
-            }
-        }
+    val anyIdle = active.exercises.any { e ->
+        !e.skipped && e.blocks.any { it.status == BlockStatus.IDLE }
     }
-    val idle = firstIdle ?: return null
+    if (!anyIdle) return null
 
     var last: RestingInfo? = null
-    outer@ for (exIdx in active.exercises.indices) {
+    for (exIdx in active.exercises.indices) {
         val ex = active.exercises[exIdx]
         if (ex.skipped) continue
         for (setIdx in ex.blocks.indices) {
-            if (exIdx == idle.first && setIdx == idle.second) break@outer
             val b = ex.blocks[setIdx]
             if (b.status == BlockStatus.DONE || b.status == BlockStatus.FAILED) {
                 last = RestingInfo(exIdx, setIdx, b.endMs)
@@ -465,7 +461,6 @@ private fun BlockView(block: ActiveBlock, now: Long, onClick: () -> Unit, onLong
                     detectTapGestures(
                         onTap = { onClick() },
                         onLongPress = {
-                            // 未开始组不允许长按；其他状态均可触发未完成弹窗
                             if (block.status != BlockStatus.IDLE) onLongPress()
                         }
                     )
