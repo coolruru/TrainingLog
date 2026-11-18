@@ -7,21 +7,33 @@ object MarkdownExporter {
         return if (ex.exercise.weight < 0) "助力$base" else base
     }
 
-    fun build(sessions: List<SessionWithExercises>, rangeDesc: String, partDesc: String): String {
+    fun build(
+        sessions: List<SessionWithExercises>,
+        rangeDesc: String,
+        partDesc: String
+    ): String {
         val sb = StringBuilder()
-        sb.appendLine("# 训练记录"); sb.appendLine()
+        sb.appendLine("# 训练记录")
+        sb.appendLine()
         sb.appendLine("- 日期范围：$rangeDesc")
         sb.appendLine("- 部位：$partDesc")
-        sb.appendLine("- 记录数：${sessions.size} 条"); sb.appendLine()
-        sb.appendLine("---"); sb.appendLine()
+        sb.appendLine("- 记录数：${sessions.size} 条")
+        sb.appendLine()
+        sb.appendLine("---")
+        sb.appendLine()
 
-        val grouped = sessions.groupBy { it.session.date to it.session.bodyPart }
+        val grouped = sessions
+            .groupBy { it.session.date to it.session.bodyPart }
             .toSortedMap(compareBy({ it.first }, { it.second }))
 
         for ((key, list) in grouped) {
             val (date, part) = key
-            sb.appendLine("## $date｜$part"); sb.appendLine()
-            list.mapNotNull { it.session.goal.ifBlank { null } }.distinct().firstOrNull()?.let { sb.appendLine("> 目标：$it") }
+            sb.appendLine("## $date｜$part")
+            sb.appendLine()
+
+            list.mapNotNull { it.session.goal.ifBlank { null } }.distinct().firstOrNull()?.let {
+                sb.appendLine("> 目标：$it")
+            }
             list.mapNotNull { it.session.notes.ifBlank { null } }.distinct().takeIf { it.isNotEmpty() }?.let {
                 sb.appendLine("> 训练备注：${it.joinToString("；")}")
             }
@@ -41,7 +53,8 @@ object MarkdownExporter {
             all.filter { !it.exercise.isCoreAddon }.forEach { render(sb, it, "###") }
             val core = all.filter { it.exercise.isCoreAddon }
             if (core.isNotEmpty()) {
-                sb.appendLine("### 训练后核心附加"); sb.appendLine()
+                sb.appendLine("### 训练后核心附加")
+                sb.appendLine()
                 core.forEach { render(sb, it, "####") }
             }
         }
@@ -65,16 +78,21 @@ object MarkdownExporter {
                 if (p.pulley.isNotBlank()) add("滑轮${p.pulley}")
                 if (p.other.isNotBlank()) add(p.other)
             }
-            val s = if (settings.isEmpty()) "" else "｜${settings.joinToString("、")}"
-            sb.appendLine("- 器械：${p.equipmentName.ifBlank { p.exerciseName }}（${ex.gymName}）$s")
+            val nameStr = p.equipmentName.ifBlank { p.exerciseName }
+            val extra = buildList {
+                if (p.equipmentType.isNotBlank() && p.equipmentType != "未填") add(p.equipmentType)
+                if (p.gymName.isNotBlank()) add(p.gymName)
+                addAll(settings)
+            }
+            val str = if (extra.isEmpty()) "" else "｜${extra.joinToString("、")}"
+            sb.appendLine("- 器械：$nameStr$str")
         }
         sb.appendLine("- 组明细：")
         ex.sets.sortedBy { it.setIndex }.forEach { set ->
             val mark = if (set.completed) "✓完成" else "✗未完成"
-            val extra = if (!set.completed) "，力竭${set.failureReps}次" else ""
             val dur = if (set.durationSeconds > 0) "，用时${set.durationSeconds}s" else ""
             val rest = if (set.restTakenSeconds > 0) "，组后休息${set.restTakenSeconds}s" else ""
-            sb.appendLine("  - 第${set.setIndex}组：$mark，实际${set.actualReps}次$extra$dur$rest")
+            sb.appendLine("  - 第${set.setIndex}组：$mark，实际${set.actualReps}次$dur$rest")
         }
         sb.appendLine()
     }
