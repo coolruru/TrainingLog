@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+
 package com.example.traininglog
 
 import androidx.activity.compose.BackHandler
@@ -27,7 +29,6 @@ import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     vm: TrainingViewModel,
@@ -338,7 +339,6 @@ private fun ListView(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionDetailScreen(
     s: SessionWithExercises,
