@@ -57,7 +57,6 @@ fun EquipmentScreen(
         }
     }
 
-    val photos by vm.allProfiles.collectAsState()
     var profilesWithPhotos by remember { mutableStateOf<List<EquipmentWithPhotos>>(emptyList()) }
     LaunchedEffect(filtered) {
         val allPhotos = vm.getAllProfilePhotos()
@@ -125,9 +124,7 @@ fun EquipmentScreen(
         EquipmentEditDialog(
             vm = vm,
             initial = profile,
-            onDone = { saved ->
-                editing = null
-            }
+            onDone = { editing = null }
         )
     }
 }
@@ -168,14 +165,10 @@ fun ProfilePickerDialog(
     onDismiss: () -> Unit,
     onSelect: (EquipmentProfile) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     var profiles by remember { mutableStateOf<List<EquipmentProfile>>(emptyList()) }
     var showAddDialog by remember { mutableStateOf(false) }
 
-    fun refresh() {
-        LaunchedEffect(exerciseName) {
-            profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
-        }
-    }
     LaunchedEffect(exerciseName) {
         profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
     }
@@ -187,7 +180,10 @@ fun ProfilePickerDialog(
             onDone = { saved ->
                 showAddDialog = false
                 if (saved != null) {
-                    profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
+                    scope.launch {
+                        profiles = vm.getAllProfiles()
+                            .filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
+                    }
                     onSelect(saved)
                 }
             }
