@@ -32,9 +32,7 @@ fun AddRecordScreen(
         topBar = {
             TopAppBar(
                 title = { Text("添加记录") },
-                navigationIcon = {
-                    TextButton(onClick = onCancel) { Text("取消") }
-                },
+                navigationIcon = { TextButton(onClick = onCancel) { Text("取消") } },
                 actions = {
                     TextButton(onClick = {
                         val secs = parseDurationToSeconds(durationInput) ?: 0
