@@ -27,16 +27,37 @@ import kotlin.math.roundToInt
 @Composable
 fun TemplateScreen(
     vm: TrainingViewModel,
-    onEditTemplate: (WorkoutTemplateWithExercises) -> Unit
+    onEditTemplate: (WorkoutTemplateWithExercises) -> Unit,
+    showAddDialog: Boolean = false,
+    onShowAddConsumed: () -> Unit = {}
 ) {
     val templates by vm.templates.collectAsState()
+
+    LaunchedEffect(showAddDialog) {
+        if (showAddDialog) {
+            onEditTemplate(
+                WorkoutTemplateWithExercises(
+                    template = WorkoutTemplate(
+                        id = 0,
+                        name = "",
+                        bodyPart = "胸",
+                        goal = "力量",
+                        createdAt = System.currentTimeMillis()
+                    ),
+                    exercises = emptyList()
+                )
+            )
+            onShowAddConsumed()
+        }
+    }
+
     if (templates.isEmpty()) {
         Column(
             Modifier.fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("还没有模板。在“训练”页配置好动作后点“保存模板”。", style = MaterialTheme.typography.bodyMedium)
+            Text("还没有模板。点右上角 ⋮ 新建。", style = MaterialTheme.typography.bodyMedium)
         }
         return
     }
@@ -67,7 +88,7 @@ private fun TemplateRow(
     Card(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(template.template.name, style = MaterialTheme.typography.titleSmall)
+                Text(template.template.name.ifBlank { "未命名模板" }, style = MaterialTheme.typography.titleSmall)
                 Text(
                     "${template.template.bodyPart} · ${template.template.goal}｜${template.exercises.size} 动作｜$dateStr",
                     style = MaterialTheme.typography.bodySmall
@@ -101,12 +122,12 @@ fun TemplateEditScreen(
     }
     var showPicker by remember { mutableStateOf(false) }
     var showNameDialog by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
+    var newName by remember { mutableStateOf(initial.template.name) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("编辑模板") },
+                title = { Text(if (initial.template.id == 0L) "新建模板" else "编辑模板") },
                 navigationIcon = { TextButton(onClick = onDone) { Text("取消") } },
                 actions = { TextButton(onClick = { showNameDialog = true }) { Text("保存") } }
             )
@@ -175,11 +196,11 @@ fun TemplateEditScreen(
     if (showNameDialog) {
         AlertDialog(
             onDismissRequest = { showNameDialog = false },
-            title = { Text("另存为新模板") },
+            title = { Text("保存模板") },
             text = {
                 OutlinedTextField(
                     value = newName, onValueChange = { newName = it },
-                    label = { Text("新模板名称") }, singleLine = true
+                    label = { Text("模板名称") }, singleLine = true
                 )
             },
             confirmButton = {
