@@ -1,9 +1,10 @@
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+
 package com.example.traininglog
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -17,111 +18,77 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
-import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import java.io.File
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun EquipmentScreen(vm: TrainingViewModel) {
+fun EquipmentScreen(
+    vm: TrainingViewModel,
+    showAddDialog: Boolean = false,
+    onShowAddConsumed: () -> Unit = {}
+) {
     val ctx = LocalContext.current
-    val gyms by vm.gyms.collectAsState()
-    var selectedGymId by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(gyms) {
-        if (selectedGymId == null || gyms.none { it.id == selectedGymId }) {
-            selectedGymId = gyms.firstOrNull()?.id
-        }
-    }
-    var profiles by remember { mutableStateOf<List<EquipmentWithPhotos>>(emptyList()) }
-    LaunchedEffect(selectedGymId, gyms) {
-        val gid = selectedGymId
-        if (gid == null) profiles = emptyList()
-        else {
-            val ps = vm.getAllProfiles().filter { it.gymId == gid }
-            profiles = assembleEquipment(ps, vm.getAllProfilePhotos(), gyms)
-        }
-    }
-    var showAddGym by remember { mutableStateOf(false) }
-    var newGymName by remember { mutableStateOf("") }
+    val allProfiles by vm.allProfiles.collectAsState()
+    var filterAction by remember { mutableStateOf<String?>(null) }
+    var filterType by remember { mutableStateOf<String?>(null) }
+    var filterGym by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf<EquipmentProfile?>(null) }
-    var gymLongPress by remember { mutableStateOf<Gym?>(null) }
-    var gymRenameTarget by remember { mutableStateOf<Gym?>(null) }
-    var gymRenameText by remember { mutableStateOf("") }
-    var gymDeleteTarget by remember { mutableStateOf<Gym?>(null) }
+
+    LaunchedEffect(showAddDialog) {
+        if (showAddDialog) {
+            editing = EquipmentProfile(exerciseName = "")
+            onShowAddConsumed()
+        }
+    }
+
+    val actions = remember(allProfiles) { allProfiles.map { it.exerciseName }.distinct().sorted() }
+    val types = remember(allProfiles) { allProfiles.map { it.equipmentType }.distinct().sorted() }
+    val gyms = remember(allProfiles) { allProfiles.map { it.gymName }.filter { it.isNotBlank() }.distinct().sorted() }
+
+    val filtered = remember(allProfiles, filterAction, filterType, filterGym) {
+        allProfiles.filter { p ->
+            (filterAction == null || p.exerciseName == filterAction) &&
+            (filterType == null || p.equipmentType == filterType) &&
+            (filterGym == null || p.gymName == filterGym)
+        }
+    }
+
+    val photos by vm.allProfiles.collectAsState()
+    var profilesWithPhotos by remember { mutableStateOf<List<EquipmentWithPhotos>>(emptyList()) }
+    LaunchedEffect(filtered) {
+        val allPhotos = vm.getAllProfilePhotos()
+        profilesWithPhotos = assembleEquipment(filtered, allPhotos)
+    }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text("健身房：", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.width(6.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(gyms) { g ->
-                    FilterChip(
-                        selected = g.id == selectedGymId,
-                        onClick = { selectedGymId = g.id },
-                        label = {
-                            Text(
-                                g.name,
-                                modifier = Modifier.combinedClickable(
-                                    onClick = { selectedGymId = g.id },
-                                    onLongClick = { gymLongPress = g }
-                                )
-                            )
-                        }
-                    )
-                }
-                item { AssistChip(onClick = { showAddGym = true }, label = { Text("+") }) }
+            FilterRow("动作", actions, filterAction) { filterAction = it }
+            FilterRow("类型", types, filterType) { filterType = it }
+            FilterRow("健身房", gyms, filterGym) { filterGym = it }
+        }
+        HorizontalDivider()
+
+        if (profilesWithPhotos.isEmpty()) {
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("还没有器械档案。点右上角 ⋮ 添加。", style = MaterialTheme.typography.bodyMedium)
             }
-        }
-
-        if (showAddGym) {
-            AlertDialog(
-                onDismissRequest = { showAddGym = false },
-                title = { Text("添加健身房") },
-                text = {
-                    OutlinedTextField(
-                        value = newGymName,
-                        onValueChange = { newGymName = it },
-                        label = { Text("名称") },
-                        singleLine = true
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        vm.addGym(newGymName); newGymName = ""; showAddGym = false
-                    }) { Text("添加") }
-                },
-                dismissButton = { TextButton(onClick = { showAddGym = false }) { Text("取消") } }
-            )
-        }
-
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("器械档案", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Button(onClick = {
-                val gid = selectedGymId ?: return@Button
-                editing = EquipmentProfile(gymId = gid, exerciseName = "")
-            }) { Text("+ 添加") }
-        }
-
-        if (selectedGymId == null) {
-            Text("先添加一个健身房。", Modifier.padding(12.dp))
-        } else if (profiles.isEmpty()) {
-            Text("当前健身房还没有器械档案。", Modifier.padding(12.dp))
         } else {
             LazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(profiles) { p ->
+                items(profilesWithPhotos) { p ->
                     Card(onClick = { editing = p.profile }, modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             p.photos.firstOrNull()?.let { ph ->
@@ -137,106 +104,158 @@ fun EquipmentScreen(vm: TrainingViewModel) {
                                     p.profile.equipmentName.ifBlank { p.profile.exerciseName },
                                     style = MaterialTheme.typography.titleSmall
                                 )
-                                Text(
-                                    "动作：${p.profile.exerciseName}｜照片：${p.photos.size}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                val extra = buildList {
+                                    add("动作：${p.profile.exerciseName}")
+                                    if (p.profile.equipmentType.isNotBlank() && p.profile.equipmentType != "未填")
+                                        add(p.profile.equipmentType)
+                                    if (p.profile.gymName.isNotBlank()) add(p.profile.gymName)
+                                    add("照片：${p.photos.size}")
+                                }
+                                Text(extra.joinToString("｜"), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
                 }
+                item { Spacer(Modifier.height(60.dp)) }
             }
         }
-    }
-
-    gymLongPress?.let { g ->
-        Dialog(onDismissRequest = { gymLongPress = null }) {
-            Card(Modifier.fillMaxWidth().padding(16.dp)) {
-                Column(Modifier.padding(8.dp)) {
-                    Text(
-                        g.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
-                    )
-                    HorizontalDivider()
-                    TextButton(
-                        onClick = { gymRenameTarget = g; gymRenameText = g.name; gymLongPress = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("改名") }
-                    TextButton(
-                        onClick = { gymDeleteTarget = g; gymLongPress = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
-                    TextButton(
-                        onClick = { gymLongPress = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("取消") }
-                }
-            }
-        }
-    }
-
-    gymRenameTarget?.let { g ->
-        AlertDialog(
-            onDismissRequest = { gymRenameTarget = null },
-            title = { Text("改名") },
-            text = {
-                OutlinedTextField(
-                    value = gymRenameText,
-                    onValueChange = { gymRenameText = it },
-                    label = { Text("新名称") },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.renameGym(g.id, gymRenameText)
-                    gymRenameTarget = null
-                }) { Text("保存") }
-            },
-            dismissButton = { TextButton(onClick = { gymRenameTarget = null }) { Text("取消") } }
-        )
-    }
-
-    gymDeleteTarget?.let { g ->
-        var profileCount by remember(g.id) { mutableStateOf(0) }
-        LaunchedEffect(g.id) {
-            profileCount = vm.getAllProfiles().count { it.gymId == g.id }
-        }
-        AlertDialog(
-            onDismissRequest = { gymDeleteTarget = null },
-            title = { Text("删除健身房") },
-            text = {
-                Text("将同时删除该健身房下的 $profileCount 条器械档案和照片。确定删除“${g.name}”？")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val dir = ctx.filesDir
-                    val target = g
-                    MainScope().launch { vm.deleteGymCascade(target.id, dir) }
-                    gymDeleteTarget = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { gymDeleteTarget = null }) { Text("取消") } }
-        )
     }
 
     editing?.let { profile ->
-        EquipmentEditDialog(vm = vm, initial = profile, gyms = gyms, onDone = { editing = null })
+        EquipmentEditDialog(
+            vm = vm,
+            initial = profile,
+            onDone = { saved ->
+                editing = null
+            }
+        )
     }
 }
 
 @Composable
-private fun EquipmentEditDialog(
+private fun FilterRow(
+    label: String,
+    options: List<String>,
+    selected: String?,
+    onSelect: (String?) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("$label：", style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(56.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            item {
+                FilterChip(
+                    selected = selected == null,
+                    onClick = { onSelect(null) },
+                    label = { Text("全部") }
+                )
+            }
+            items(options) { o ->
+                FilterChip(
+                    selected = selected == o,
+                    onClick = { onSelect(o) },
+                    label = { Text(o) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ProfilePickerDialog(
+    vm: TrainingViewModel,
+    exerciseName: String,
+    onDismiss: () -> Unit,
+    onSelect: (EquipmentProfile) -> Unit
+) {
+    var profiles by remember { mutableStateOf<List<EquipmentProfile>>(emptyList()) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        LaunchedEffect(exerciseName) {
+            profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
+        }
+    }
+    LaunchedEffect(exerciseName) {
+        profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
+    }
+
+    if (showAddDialog) {
+        EquipmentEditDialog(
+            vm = vm,
+            initial = EquipmentProfile(exerciseName = exerciseName),
+            onDone = { saved ->
+                showAddDialog = false
+                if (saved != null) {
+                    profiles = vm.getAllProfiles().filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
+                    onSelect(saved)
+                }
+            }
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择器械档案") },
+        text = {
+            if (profiles.isEmpty()) {
+                Box(
+                    Modifier.fillMaxWidth().height(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    FilledIconButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.size(64.dp)
+                    ) {
+                        Text("+", style = MaterialTheme.typography.headlineLarge)
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(profiles.size) { i ->
+                            val p = profiles[i]
+                            Card(onClick = { onSelect(p) },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                Column(Modifier.padding(8.dp)) {
+                                    Text(p.equipmentName.ifBlank { p.exerciseName },
+                                        style = MaterialTheme.typography.titleSmall)
+                                    val extra = buildList {
+                                        add("动作：${p.exerciseName}")
+                                        if (p.equipmentType.isNotBlank() && p.equipmentType != "未填")
+                                            add(p.equipmentType)
+                                        if (p.gymName.isNotBlank()) add(p.gymName)
+                                    }
+                                    Text(extra.joinToString("｜"), style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("+ 添加器械") }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EquipmentEditDialog(
     vm: TrainingViewModel,
     initial: EquipmentProfile,
-    gyms: List<Gym>,
-    onDone: () -> Unit
+    onDone: (EquipmentProfile?) -> Unit
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var exercise by remember { mutableStateOf(initial.exerciseName) }
     var equipmentName by remember { mutableStateOf(initial.equipmentName) }
+    var equipmentType by remember { mutableStateOf(initial.equipmentType.ifBlank { "未填" }) }
+    var gymName by remember { mutableStateOf(initial.gymName) }
     var seat by remember { mutableStateOf(initial.seat) }
     var backrest by remember { mutableStateOf(initial.backrest) }
     var grip by remember { mutableStateOf(initial.grip) }
@@ -249,7 +268,9 @@ private fun EquipmentEditDialog(
     var existingPhotos by remember { mutableStateOf(listOf<EquipmentProfilePhoto>()) }
     var newPhotos by remember { mutableStateOf(listOf<PhotoInput>()) }
     var pendingCamera by remember { mutableStateOf<File?>(null) }
-    var selectedGymId by remember { mutableStateOf(initial.gymId) }
+    var showTypeMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var refCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(initial.id) {
         if (initial.id != 0L) existingPhotos = vm.loadProfilePhotos(initial.id)
@@ -277,27 +298,38 @@ private fun EquipmentEditDialog(
     val allExercises = DEFAULT_EXERCISES.values.flatten().distinct()
 
     AlertDialog(
-        onDismissRequest = onDone,
+        onDismissRequest = { onDone(null) },
         title = { Text(if (initial.id == 0L) "添加器械档案" else "编辑器械档案") },
         text = {
             Column(
                 Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                DropdownField(
-                    "健身房",
-                    gyms.firstOrNull { it.id == selectedGymId }?.name ?: "未选择",
-                    gyms.map { it.name }
-                ) { name ->
-                    gyms.firstOrNull { it.name == name }?.let { selectedGymId = it.id }
-                }
-                OutlinedTextField(exercise, { exercise = it }, label = { Text("动作") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(exercise, { exercise = it }, label = { Text("动作") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(allExercises.size) { i ->
                         AssistChip(onClick = { exercise = allExercises[i] }, label = { Text(allExercises[i]) })
                     }
                 }
-                OutlinedTextField(equipmentName, { equipmentName = it }, label = { Text("器械名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(equipmentName, { equipmentName = it }, label = { Text("器械名称") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                Box {
+                    OutlinedButton(
+                        onClick = { showTypeMenu = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("器械类型：$equipmentType") }
+                    DropdownMenu(expanded = showTypeMenu, onDismissRequest = { showTypeMenu = false }) {
+                        EQUIPMENT_TYPES.forEach { t ->
+                            DropdownMenuItem(
+                                text = { Text(t) },
+                                onClick = { equipmentType = t; showTypeMenu = false }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(gymName, { gymName = it }, label = { Text("健身房") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(seat, { seat = it }, label = { Text("座位") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(backrest, { backrest = it }, label = { Text("靠背") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(grip, { grip = it }, label = { Text("握把") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -314,11 +346,8 @@ private fun EquipmentEditDialog(
                 existingPhotos.forEach { ph ->
                     Card {
                         Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            AsyncImage(
-                                model = fileForPath(ctx, ph.filePath),
-                                contentDescription = ph.tag,
-                                modifier = Modifier.size(64.dp)
-                            )
+                            AsyncImage(model = fileForPath(ctx, ph.filePath), contentDescription = ph.tag,
+                                modifier = Modifier.size(64.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(ph.tag, modifier = Modifier.weight(1f))
                             TextButton(onClick = {
@@ -331,20 +360,13 @@ private fun EquipmentEditDialog(
                 newPhotos.forEachIndexed { i, p ->
                     Card {
                         Column(Modifier.padding(6.dp)) {
-                            AsyncImage(
-                                model = fileForPath(ctx, p.filePath),
-                                contentDescription = "新照片",
-                                modifier = Modifier.fillMaxWidth().height(120.dp)
-                            )
+                            AsyncImage(model = fileForPath(ctx, p.filePath), contentDescription = "新照片",
+                                modifier = Modifier.fillMaxWidth().height(120.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 PHOTO_TAGS.forEach { t ->
-                                    FilterChip(
-                                        selected = p.tag == t,
-                                        onClick = {
-                                            newPhotos = newPhotos.toMutableList().also { it[i] = it[i].copy(tag = t) }
-                                        },
-                                        label = { Text(t) }
-                                    )
+                                    FilterChip(selected = p.tag == t,
+                                        onClick = { newPhotos = newPhotos.toMutableList().also { it[i] = it[i].copy(tag = t) } },
+                                        label = { Text(t) })
                                 }
                             }
                         }
@@ -354,16 +376,20 @@ private fun EquipmentEditDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val gid = selectedGymId ?: return@TextButton
                 if (exercise.isBlank()) return@TextButton
                 val updated = initial.copy(
-                    gymId = gid, exerciseName = exercise, equipmentName = equipmentName,
+                    exerciseName = exercise, equipmentName = equipmentName,
+                    equipmentType = equipmentType, gymName = gymName,
                     seat = seat, backrest = backrest, grip = grip, weightStack = weightStack,
                     pin = pin, assist = assist, pulley = pulley, other = other, notes = notes
                 )
                 scope.launch {
                     vm.saveProfile(updated, newPhotos, emptyList())
-                    onDone()
+                    val saved = vm.getAllProfiles().firstOrNull {
+                        it.exerciseName == exercise && it.equipmentName == equipmentName &&
+                        it.equipmentType == equipmentType && it.gymName == gymName
+                    }
+                    onDone(saved)
                 }
             }) { Text("保存") }
         },
@@ -371,26 +397,39 @@ private fun EquipmentEditDialog(
             Row {
                 if (initial.id != 0L) {
                     TextButton(onClick = {
-                        scope.launch { vm.deleteProfile(initial.id, ctx.filesDir); onDone() }
+                        scope.launch {
+                            refCount = vm.countRefsToProfile(initial.id)
+                            showDeleteConfirm = true
+                        }
                     }) { Text("删除") }
                 }
-                TextButton(onClick = onDone) { Text("取消") }
+                TextButton(onClick = { onDone(null) }) { Text("取消") }
             }
         }
     )
-}
 
-@Composable
-fun DropdownField(label: String, value: String, options: List<String>, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Column {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("$label：$value")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { o ->
-                DropdownMenuItem(text = { Text(o) }, onClick = { onSelect(o); expanded = false })
-            }
-        }
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("删除器械档案") },
+            text = {
+                Text(
+                    if (refCount > 0)
+                        "有 $refCount 条训练记录引用了该器械，删除后关联将失效。确定删除？"
+                    else
+                        "确认删除该器械档案？"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        vm.deleteProfile(initial.id, ctx.filesDir)
+                        showDeleteConfirm = false
+                        onDone(null)
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } }
+        )
     }
 }
