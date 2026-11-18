@@ -50,11 +50,6 @@ fun MainScreen(
     var editingTemplate by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
     var homeSnackbar by remember { mutableStateOf("") }
 
-    if (activeWorkout != null) {
-        WorkoutSessionScreen(vm = vm, active = activeWorkout!!)
-        return
-    }
-
     if (sessionDetail != null) {
         SessionDetailScreen(
             s = sessionDetail!!,
@@ -101,8 +96,14 @@ fun MainScreen(
         BackHandler { tab = 0 }
     }
 
+    val showWorkoutTopBar = tab == 0 && activeWorkout != null
+
     Scaffold(
-        topBar = { TopAppBar(title = { Text(titles.getOrElse(tab) { "训练" }) }) },
+        topBar = {
+            if (!showWorkoutTopBar) {
+                TopAppBar(title = { Text(titles.getOrElse(tab) { "训练" }) })
+            }
+        },
         bottomBar = {
             NavigationBar {
                 titles.forEachIndexed { i, t ->
@@ -119,19 +120,19 @@ fun MainScreen(
     ) { padding ->
         Box(Modifier.padding(padding)) {
             when (tab) {
-                0 -> TrainingPlanScreen(
-                    vm = vm,
-                    onOpenAddRecord = { plan -> addRecordPlan = plan }
-                )
-                1 -> HistoryScreen(
-                    vm = vm,
-                    onOpenDetail = { sessionDetail = it }
-                )
+                0 -> {
+                    if (activeWorkout != null) {
+                        WorkoutSessionScreen(vm = vm, active = activeWorkout!!, embedded = true)
+                    } else {
+                        TrainingPlanScreen(
+                            vm = vm,
+                            onOpenAddRecord = { addRecordPlan = it }
+                        )
+                    }
+                }
+                1 -> HistoryScreen(vm = vm, onOpenDetail = { sessionDetail = it })
                 2 -> EquipmentScreen(vm)
-                3 -> TemplateScreen(
-                    vm = vm,
-                    onEditTemplate = { editingTemplate = it }
-                )
+                3 -> TemplateScreen(vm = vm, onEditTemplate = { editingTemplate = it })
                 4 -> SettingsScreen(
                     vm = vm,
                     themeMode = themeMode,
@@ -232,7 +233,8 @@ fun HelpScreen(onBack: () -> Unit) {
             Text("显示时负数动作名前自动加“助力”，如“助力引体”。")
             Text("训练流程", style = MaterialTheme.typography.titleMedium)
             Text("训练页 → 选部位 + 目标 → 选动作 → 填重量/组数/次数/组间休息 → 开始训练 / 添加记录 / 保存模板。")
-            Text("点“开始训练”进入计时界面：方块灰 → 橙（本组计时）→ 绿（完成）；长按橙色方块 → 红（未完成，填实际次数+力竭次数）。")
+            Text("点“开始训练”后，计时界面显示在训练页内，可继续切换底部其他 tab。")
+            Text("方块灰 → 橙（本组计时）→ 绿（完成）；长按橙色方块 → 红（未完成，填实际次数+力竭次数）。")
             Text("组间休息", style = MaterialTheme.typography.titleMedium)
             Text("每组结束后，方块下方出现蓝色填充线：从左向右填充，剩余秒数显示在右侧。休息结束时蓝线轻微抖动。")
             Text("点下一个方块立刻停止蓝线，并记录本段实际休息时长到上一组。")
