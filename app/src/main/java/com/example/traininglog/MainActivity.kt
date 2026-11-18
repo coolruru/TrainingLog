@@ -45,6 +45,7 @@ fun MainScreen(
     val activeWorkout by vm.activeWorkout.collectAsState()
 
     var sessionDetail by remember { mutableStateOf<SessionWithExercises?>(null) }
+    var historyEditSession by remember { mutableStateOf<SessionWithExercises?>(null) }
     var addRecordPlan by remember { mutableStateOf<WorkoutPlan?>(null) }
     var helpOpen by remember { mutableStateOf(false) }
     var editingTemplate by remember { mutableStateOf<WorkoutTemplateWithExercises?>(null) }
@@ -54,7 +55,17 @@ fun MainScreen(
         SessionDetailScreen(
             s = sessionDetail!!,
             onBack = { sessionDetail = null },
+            onEditHistory = { historyEditSession = sessionDetail },
             onSavedAsTemplate = { homeSnackbar = it }
+        )
+        return
+    }
+
+    if (historyEditSession != null) {
+        HistoryEditScreen(
+            vm = vm,
+            session = historyEditSession!!,
+            onBack = { historyEditSession = null; sessionDetail = null }
         )
         return
     }
@@ -96,12 +107,48 @@ fun MainScreen(
         BackHandler { tab = 0 }
     }
 
+    var topMenuOpen by remember { mutableStateOf(false) }
+    var equipmentShowAdd by remember { mutableStateOf(false) }
+    var templateShowAdd by remember { mutableStateOf(false) }
+    var trainingPlanResetTrigger by remember { mutableStateOf(0) }
+
     val showWorkoutTopBar = tab == 0 && activeWorkout != null
 
     Scaffold(
         topBar = {
             if (!showWorkoutTopBar) {
-                TopAppBar(title = { Text(titles.getOrElse(tab) { "训练" }) })
+                TopAppBar(
+                    title = { Text(titles.getOrElse(tab) { "训练" }) },
+                    actions = {
+                        if (tab in 1..3) {
+                            IconButton(onClick = { topMenuOpen = true }) {
+                                Text("⋮", style = MaterialTheme.typography.titleLarge)
+                            }
+                            DropdownMenu(expanded = topMenuOpen, onDismissRequest = { topMenuOpen = false }) {
+                                val label = when (tab) {
+                                    1 -> "添加记录"
+                                    2 -> "添加器械"
+                                    3 -> "新建模板"
+                                    else -> ""
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        topMenuOpen = false
+                                        when (tab) {
+                                            1 -> {
+                                                trainingPlanResetTrigger++
+                                                tab = 0
+                                            }
+                                            2 -> equipmentShowAdd = true
+                                            3 -> templateShowAdd = true
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
             }
         },
         bottomBar = {
@@ -126,13 +173,23 @@ fun MainScreen(
                     } else {
                         TrainingPlanScreen(
                             vm = vm,
-                            onOpenAddRecord = { addRecordPlan = it }
+                            onOpenAddRecord = { addRecordPlan = it },
+                            resetTrigger = trainingPlanResetTrigger
                         )
                     }
                 }
                 1 -> HistoryScreen(vm = vm, onOpenDetail = { sessionDetail = it })
-                2 -> EquipmentScreen(vm)
-                3 -> TemplateScreen(vm = vm, onEditTemplate = { editingTemplate = it })
+                2 -> EquipmentScreen(
+                    vm = vm,
+                    showAddDialog = equipmentShowAdd,
+                    onShowAddConsumed = { equipmentShowAdd = false }
+                )
+                3 -> TemplateScreen(
+                    vm = vm,
+                    onEditTemplate = { editingTemplate = it },
+                    showAddDialog = templateShowAdd,
+                    onShowAddConsumed = { templateShowAdd = false }
+                )
                 4 -> SettingsScreen(
                     vm = vm,
                     themeMode = themeMode,
@@ -202,7 +259,6 @@ fun SettingsScreen(
                 OutlinedButton(onClick = { createZipLauncher.launch("training_backup_${System.currentTimeMillis()}.zip") }) { Text("导出 ZIP") }
             }
             OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json", "application/zip", "*/*")) }) { Text("导入 JSON / ZIP") }
-            Text("Markdown 导出在历史页左上角菜单里。JSON/ZIP 用于数据备份与恢复。", style = MaterialTheme.typography.bodySmall)
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
@@ -212,7 +268,7 @@ fun SettingsScreen(
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("训练记录 2.4 · 计时 · 模板 · 导入导出 · 动作库 · 蓝线计时", style = MaterialTheme.typography.bodySmall)
+            Text("训练记录 2.5 · 计时 · 模板 · 导入导出 · 动作库 · 蓝线计时", style = MaterialTheme.typography.bodySmall)
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -229,21 +285,17 @@ fun HelpScreen(onBack: () -> Unit) {
         ) {
             Text("重量输入", style = MaterialTheme.typography.titleMedium)
             Text("空或 0 = 自重；正数 = 负重（kg）；负数 = 助力（kg）。")
-            Text("例：卧推写 80 → 80kg；引体写 -40 → 助力40kg；俯卧撑写 0 → 自重。")
             Text("显示时负数动作名前自动加“助力”，如“助力引体”。")
             Text("训练流程", style = MaterialTheme.typography.titleMedium)
-            Text("训练页 → 选部位 + 目标 → 选动作 → 填重量/组数/次数/组间休息 → 开始训练 / 添加记录 / 保存模板。")
-            Text("点“开始训练”后，计时界面显示在训练页内，可继续切换底部其他 tab。")
-            Text("方块灰 → 橙（本组计时）→ 绿（完成）；长按橙色方块 → 红（未完成，填实际次数+力竭次数）。")
+            Text("训练页 → 选部位 + 目标 → 选动作 → 填参数 → 开始训练 / 添加记录 / 保存模板。")
+            Text("开始训练后计时界面显示在训练 tab 内，可继续切底部其他 tab。")
+            Text("方块灰 → 橙 → 绿；长按橙色或绿色方块可标记未完成（只填实际次数）。")
             Text("组间休息", style = MaterialTheme.typography.titleMedium)
-            Text("每组结束后，方块下方出现蓝色填充线：从左向右填充，剩余秒数显示在右侧。休息结束时蓝线轻微抖动。")
-            Text("点下一个方块立刻停止蓝线，并记录本段实际休息时长到上一组。")
-            Text("同一时刻只允许一个方块在计时；同一动作必须按组顺序，不能跳过未完成组开始下一组。")
-            Text("排序与编辑", style = MaterialTheme.typography.titleMedium)
-            Text("训练页、计时页、模板编辑页的动作卡都支持拖动手柄排序。")
-            Text("计时页每个动作卡右上角 ⋮ 可编辑参数或删除动作。")
-            Text("数据备份", style = MaterialTheme.typography.titleMedium)
-            Text("历史页左上角菜单、设置页都可以导入/导出。JSON 与 ZIP 可双向导入；Markdown 只用于查看与分享，不作为导入源。")
+            Text("蓝线从左向右填充，休息结束抖动；点下一个方块立即停止并记录到上一组。")
+            Text("历史编辑", style = MaterialTheme.typography.titleMedium)
+            Text("历史详情页顶部“编辑”按钮可进入历史编辑：编辑每组参数、删组、删动作、加组、加动作。")
+            Text("导出", style = MaterialTheme.typography.titleMedium)
+            Text("导出统一在设置页：JSON / ZIP 可导入；Markdown 只用于查看。")
             Spacer(Modifier.height(40.dp))
         }
     }
