@@ -88,6 +88,9 @@ fun TrainingPlanScreen(
                                 )
                             }
                         }
+                        Spacer(Modifier.height(20.dp))
+                        Text("或", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(12.dp))
                         OutlinedButton(onClick = { showTemplatePicker = true }) { Text("从模板开始") }
                     }
@@ -395,12 +398,18 @@ fun ExercisePlanCard(
     var restStr by remember(exercise.exerciseName) { mutableStateOf(exercise.restSeconds.toString()) }
     var showEquipmentPicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-    var linkedProfileId by remember(exercise.equipmentProfileId) { mutableStateOf(exercise.equipmentProfileId) }
+    var linkedProfile by remember { mutableStateOf<EquipmentProfile?>(null) }
     val ctx = LocalContext.current
     val density = LocalDensity.current
     val vm: TrainingViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = TrainingViewModelFactory(AppDatabase.get(ctx).dao())
     )
+
+    LaunchedEffect(exercise.equipmentProfileId) {
+        if (exercise.equipmentProfileId != null) {
+            linkedProfile = vm.getAllProfiles().firstOrNull { it.id == exercise.equipmentProfileId }
+        } else linkedProfile = null
+    }
 
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -480,11 +489,11 @@ fun ExercisePlanCard(
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { showEquipmentPicker = true }) {
-                    Text(linkedProfileId?.let { "已关联器械 #$it" } ?: "关联器械")
+                    Text(linkedProfile?.let { "已关联：${it.equipmentName.ifBlank { it.exerciseName }}" } ?: "关联器械")
                 }
-                if (linkedProfileId != null) {
+                if (linkedProfile != null) {
                     TextButton(onClick = {
-                        linkedProfileId = null
+                        linkedProfile = null
                         onChange(exercise.copy(equipmentProfileId = null))
                     }) { Text("清除") }
                 }
@@ -502,7 +511,7 @@ fun ExercisePlanCard(
             exerciseName = exercise.exerciseName,
             onDismiss = { showEquipmentPicker = false },
             onSelect = {
-                linkedProfileId = it.id
+                linkedProfile = it
                 onChange(exercise.copy(equipmentProfileId = it.id))
                 showEquipmentPicker = false
             }
@@ -548,40 +557,4 @@ private fun TemplatePickerSheet(
             }
         }
     }
-}
-
-@Composable
-fun ProfilePickerDialog(
-    vm: TrainingViewModel,
-    exerciseName: String,
-    onDismiss: () -> Unit,
-    onSelect: (EquipmentProfile) -> Unit
-) {
-    var profiles by remember { mutableStateOf<List<Pair<EquipmentProfile, String>>>(emptyList()) }
-    LaunchedEffect(exerciseName) {
-        val all = vm.getAllProfiles()
-        val gyms = vm.getAllGyms()
-        val gymById = gyms.associateBy { it.id }
-        profiles = all.filter { exerciseName.isBlank() || it.exerciseName == exerciseName }
-            .map { it to (gymById[it.gymId]?.name ?: "") }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("选择器械档案") },
-        text = {
-            if (profiles.isEmpty()) Text("没有匹配的器械档案，先到“器械”页添加。")
-            else LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                items(profiles.size) { i ->
-                    val (p, g) = profiles[i]
-                    Card(onClick = { onSelect(p) }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Column(Modifier.padding(8.dp)) {
-                            Text(p.equipmentName.ifBlank { p.exerciseName }, style = MaterialTheme.typography.titleSmall)
-                            Text("动作：${p.exerciseName}｜健身房：$g", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
 }
