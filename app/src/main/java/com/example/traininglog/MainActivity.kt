@@ -110,7 +110,6 @@ fun MainScreen(
     var topMenuOpen by remember { mutableStateOf(false) }
     var equipmentShowAdd by remember { mutableStateOf(false) }
     var templateShowAdd by remember { mutableStateOf(false) }
-    var trainingPlanResetTrigger by remember { mutableStateOf(0) }
 
     val showWorkoutTopBar = tab == 0 && activeWorkout != null
 
@@ -126,7 +125,7 @@ fun MainScreen(
                             }
                             DropdownMenu(expanded = topMenuOpen, onDismissRequest = { topMenuOpen = false }) {
                                 val label = when (tab) {
-                                    1 -> "添加记录"
+                                    1 -> "添加记录（去训练页）"
                                     2 -> "添加器械"
                                     3 -> "新建模板"
                                     else -> ""
@@ -136,10 +135,7 @@ fun MainScreen(
                                     onClick = {
                                         topMenuOpen = false
                                         when (tab) {
-                                            1 -> {
-                                                trainingPlanResetTrigger++
-                                                tab = 0
-                                            }
+                                            1 -> tab = 0
                                             2 -> equipmentShowAdd = true
                                             3 -> templateShowAdd = true
                                         }
@@ -173,8 +169,7 @@ fun MainScreen(
                     } else {
                         TrainingPlanScreen(
                             vm = vm,
-                            onOpenAddRecord = { addRecordPlan = it },
-                            resetTrigger = trainingPlanResetTrigger
+                            onOpenAddRecord = { addRecordPlan = it }
                         )
                     }
                 }
