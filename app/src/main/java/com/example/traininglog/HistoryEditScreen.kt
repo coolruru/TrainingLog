@@ -130,7 +130,6 @@ private fun EditableExerciseCard(
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(true) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Card {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -142,7 +141,7 @@ private fun EditableExerciseCard(
                 Text(name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 Text("${displayLoad(ex.exercise.weight)} × ${ex.sets.size}组",
                     style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { showDeleteConfirm = true }) {
+                TextButton(onClick = onDelete) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
                 }
             }
@@ -175,21 +174,6 @@ private fun EditableExerciseCard(
                 }
             }
         }
-    }
-
-    if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("删除动作") },
-            text = { Text("该动作的 ${ex.sets.size} 组记录将一并删除。确定删除？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteConfirm = false
-                    onDelete()
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } }
-        )
     }
 }
 
